@@ -10,6 +10,7 @@ interface WarrantInputs {
   daysToExpiration: number;
   riskFreeRate: number;
   dividendYield: number;
+  conversionRatio: number; // Ratio de conversión (típicamente 0.01, 0.1, 1, 10, 100)
   volatility?: number;
   marketPrice?: number;
 }
@@ -245,6 +246,7 @@ const WarrantCalculator: React.FC = () => {
   const [daysToExpiration, setDaysToExpiration] = useState<string>('30');
   const [riskFreeRate, setRiskFreeRate] = useState<string>('4.5');
   const [dividendYield, setDividendYield] = useState<string>('1.5');
+  const [conversionRatio, setConversionRatio] = useState<string>('1');
   const [calculationMode, setCalculationMode] = useState<'volatility' | 'impliedVol'>('volatility');
   const [volatility, setVolatility] = useState<string>('20');
   const [marketPrice, setMarketPrice] = useState<string>('');
@@ -280,6 +282,11 @@ const WarrantCalculator: React.FC = () => {
       newErrors.push({ field: 'dividend', message: 'Rango 0-20%' });
     }
 
+    const ratioNum = parseFloat(conversionRatio);
+    if (isNaN(ratioNum) || ratioNum <= 0) {
+      newErrors.push({ field: 'ratio', message: 'Debe ser positivo' });
+    }
+
     if (calculationMode === 'volatility') {
       const volNum = parseFloat(volatility);
       if (isNaN(volNum) || volNum < 1 || volNum > 200) {
@@ -300,6 +307,8 @@ const WarrantCalculator: React.FC = () => {
   const results: WarrantResults | null = useMemo(() => {
     if (!validate()) return null;
 
+    const ratio = parseFloat(conversionRatio);
+
     const inputs: WarrantInputs = {
       type: warrantType,
       spot: parseFloat(spot),
@@ -307,6 +316,7 @@ const WarrantCalculator: React.FC = () => {
       daysToExpiration: parseInt(daysToExpiration),
       riskFreeRate: parseFloat(riskFreeRate),
       dividendYield: parseFloat(dividendYield),
+      conversionRatio: ratio,
     };
 
     let premium = 0;
@@ -314,9 +324,12 @@ const WarrantCalculator: React.FC = () => {
 
     if (calculationMode === 'volatility') {
       inputs.volatility = parseFloat(volatility);
-      premium = blackScholes(inputs);
+      // Precio teórico BS × ratio = precio del warrant
+      premium = blackScholes(inputs) * ratio;
     } else {
-      inputs.marketPrice = parseFloat(marketPrice);
+      // Market price del warrant / ratio = precio BS para calcular IV
+      const bsEquivalentPrice = parseFloat(marketPrice) / ratio;
+      inputs.marketPrice = bsEquivalentPrice;
       const iv = calculateImpliedVol(inputs);
       if (iv === null) {
         return null;
@@ -352,6 +365,7 @@ const WarrantCalculator: React.FC = () => {
     daysToExpiration,
     riskFreeRate,
     dividendYield,
+    conversionRatio,
     calculationMode,
     volatility,
     marketPrice,
@@ -559,6 +573,23 @@ const WarrantCalculator: React.FC = () => {
                   {getError('dividend') && (
                     <p className="text-[#EF4444] text-xs mt-1">{getError('dividend')}</p>
                   )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-[#94A3B8] mb-1">
+                    Conversion Ratio
+                  </label>
+                  <input
+                    type="number"
+                    value={conversionRatio}
+                    onChange={(e) => setConversionRatio(e.target.value)}
+                    className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                    step="0.01"
+                  />
+                  {getError('ratio') && (
+                    <p className="text-[#EF4444] text-xs mt-1">{getError('ratio')}</p>
+                  )}
+                  <p className="text-[#64748B] text-xs mt-1">Común: 0.01, 0.1, 1, 10, 100</p>
                 </div>
               </div>
 
