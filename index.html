@@ -33,7 +33,6 @@
             font-family: 'Monaco', 'Courier New', monospace;
         }
 
-        /* Hide number input spinners */
         input[type="number"]::-webkit-inner-spin-button,
         input[type="number"]::-webkit-outer-spin-button {
             -webkit-appearance: none;
@@ -43,7 +42,6 @@
             -moz-appearance: textfield;
         }
 
-        /* Custom scrollbar for dark theme */
         ::-webkit-scrollbar {
             width: 8px;
         }
@@ -63,7 +61,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useMemo } = React;
+        const { useState, useMemo, useEffect } = React;
         const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } = Recharts;
 
         // ==================== CONSTANTES ====================
@@ -81,12 +79,188 @@
             border: '#334155',
         };
 
+        // ==================== BASE DE DATOS DE ACTIVOS ====================
+        // Última actualización: Diciembre 2024
+        // Fuentes: Bloomberg, Yahoo Finance, BCE, Investing.com
+
+        const UNDERLYING_ASSETS = {
+            // ===== ÍNDICES EUROPEOS =====
+            'IBEX35': {
+                name: 'IBEX 35',
+                region: 'Europa',
+                currency: 'EUR',
+                spotPrice: 11800,
+                dividendYield: 3.5,
+                volatility: 18,
+                riskFreeRate: 2.8,  // Bono español 1Y
+                description: 'Principal índice bursátil español',
+                volIndex: 'VIBEX',
+            },
+            'EUROSTOXX50': {
+                name: 'Euro Stoxx 50',
+                region: 'Europa',
+                currency: 'EUR',
+                spotPrice: 4950,
+                dividendYield: 2.8,
+                volatility: 16,
+                riskFreeRate: 2.5,  // Bund alemán 1Y
+                description: '50 mayores empresas de la Eurozona',
+                volIndex: 'VSTOXX',
+            },
+            'DAX': {
+                name: 'DAX 40',
+                region: 'Europa',
+                currency: 'EUR',
+                spotPrice: 20400,
+                dividendYield: 2.5,
+                volatility: 15,
+                riskFreeRate: 2.5,
+                description: 'Principal índice bursátil alemán (Total Return)',
+                volIndex: 'VDAX',
+            },
+            'CAC40': {
+                name: 'CAC 40',
+                region: 'Europa',
+                currency: 'EUR',
+                spotPrice: 7400,
+                dividendYield: 2.9,
+                volatility: 17,
+                riskFreeRate: 2.6,
+                description: 'Principal índice bursátil francés',
+                volIndex: 'VCAC',
+            },
+            'FTSE100': {
+                name: 'FTSE 100',
+                region: 'Europa',
+                currency: 'GBP',
+                spotPrice: 8300,
+                dividendYield: 3.8,
+                volatility: 14,
+                riskFreeRate: 4.2,  // Gilt británico
+                description: 'Principal índice bursátil del Reino Unido',
+                volIndex: 'VFTSE',
+            },
+
+            // ===== ÍNDICES ESTADOUNIDENSES =====
+            'SP500': {
+                name: 'S&P 500',
+                region: 'EEUU',
+                currency: 'USD',
+                spotPrice: 6050,
+                dividendYield: 1.3,
+                volatility: 14,
+                riskFreeRate: 4.4,  // Treasury 1Y
+                description: '500 mayores empresas de EEUU',
+                volIndex: 'VIX',
+            },
+            'NASDAQ100': {
+                name: 'NASDAQ 100',
+                region: 'EEUU',
+                currency: 'USD',
+                spotPrice: 21500,
+                dividendYield: 0.6,
+                volatility: 20,
+                riskFreeRate: 4.4,
+                description: '100 mayores empresas tecnológicas de EEUU',
+                volIndex: 'VXN',
+            },
+            'DOWJONES': {
+                name: 'Dow Jones Industrial',
+                region: 'EEUU',
+                currency: 'USD',
+                spotPrice: 44900,
+                dividendYield: 1.8,
+                volatility: 13,
+                riskFreeRate: 4.4,
+                description: '30 mayores empresas industriales de EEUU',
+                volIndex: 'VXD',
+            },
+
+            // ===== ÍNDICES ASIÁTICOS =====
+            'NIKKEI225': {
+                name: 'Nikkei 225',
+                region: 'Asia',
+                currency: 'JPY',
+                spotPrice: 38500,
+                dividendYield: 1.8,
+                volatility: 18,
+                riskFreeRate: 0.4,  // JGB
+                description: 'Principal índice bursátil japonés',
+                volIndex: 'VXJ',
+            },
+            'HANGSENG': {
+                name: 'Hang Seng',
+                region: 'Asia',
+                currency: 'HKD',
+                spotPrice: 19800,
+                dividendYield: 3.5,
+                volatility: 22,
+                riskFreeRate: 4.0,
+                description: 'Principal índice de Hong Kong',
+                volIndex: 'VHSI',
+            },
+
+            // ===== ACCIONES INDIVIDUALES (Ejemplos) =====
+            'SANTANDER': {
+                name: 'Banco Santander',
+                region: 'España',
+                currency: 'EUR',
+                spotPrice: 4.50,
+                dividendYield: 4.2,
+                volatility: 28,
+                riskFreeRate: 2.8,
+                description: 'Acción del Banco Santander (SAN.MC)',
+                volIndex: null,
+            },
+            'TELEFONICA': {
+                name: 'Telefónica',
+                region: 'España',
+                currency: 'EUR',
+                spotPrice: 4.20,
+                dividendYield: 7.1,
+                volatility: 22,
+                riskFreeRate: 2.8,
+                description: 'Acción de Telefónica (TEF.MC)',
+                volIndex: null,
+            },
+            'INDITEX': {
+                name: 'Inditex',
+                region: 'España',
+                currency: 'EUR',
+                spotPrice: 52.00,
+                dividendYield: 2.3,
+                volatility: 24,
+                riskFreeRate: 2.8,
+                description: 'Acción de Inditex (ITX.MC)',
+                volIndex: null,
+            },
+
+            // ===== PERSONALIZADO =====
+            'CUSTOM': {
+                name: 'Personalizado',
+                region: 'N/A',
+                currency: 'EUR',
+                spotPrice: 100,
+                dividendYield: 2.0,
+                volatility: 20,
+                riskFreeRate: 3.0,
+                description: 'Introduce tus propios valores',
+                volIndex: null,
+                isCustom: true,
+            },
+        };
+
+        // Agrupar por región para el selector
+        const ASSET_GROUPS = {
+            'Índices Europeos': ['IBEX35', 'EUROSTOXX50', 'DAX', 'CAC40', 'FTSE100'],
+            'Índices EEUU': ['SP500', 'NASDAQ100', 'DOWJONES'],
+            'Índices Asia': ['NIKKEI225', 'HANGSENG'],
+            'Acciones España': ['SANTANDER', 'TELEFONICA', 'INDITEX'],
+            'Otros': ['CUSTOM'],
+        };
+
         // ==================== MATEMÁTICAS FINANCIERAS ====================
 
-        /**
-         * Aproximación de la función de distribución acumulada normal estándar
-         * Método: Abramowitz-Stegun (precisión ~7.5×10^-8)
-         */
         function normalCDF(x) {
             if (x < -10) return 0;
             if (x > 10) return 1;
@@ -105,25 +279,16 @@
             return x > 0 ? 1 - prob : prob;
         }
 
-        /**
-         * Cálculo de d1 para fórmula Black-Scholes
-         */
         function calculateD1(spot, strike, T, r, q, sigma) {
             const numerator = Math.log(spot / strike) + (r - q + (sigma * sigma) / 2) * T;
             const denominator = sigma * Math.sqrt(T);
             return numerator / denominator;
         }
 
-        /**
-         * Cálculo de d2 para fórmula Black-Scholes
-         */
         function calculateD2(d1, sigma, T) {
             return d1 - sigma * Math.sqrt(T);
         }
 
-        /**
-         * Modelo Black-Scholes para opciones/warrants europeos
-         */
         function blackScholes(params) {
             const { type, spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility } = params;
 
@@ -150,9 +315,6 @@
             }
         }
 
-        /**
-         * Cálculo de Delta
-         */
         function calculateDelta(params) {
             const { type, spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility } = params;
 
@@ -175,9 +337,6 @@
                 : Math.exp(-q * T) * (Nd1 - 1);
         }
 
-        /**
-         * Cálculo de Vega
-         */
         function calculateVega(params) {
             const { spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility } = params;
 
@@ -196,9 +355,6 @@
             return vega / 100;
         }
 
-        /**
-         * Cálculo de Volatilidad Implícita mediante Newton-Raphson
-         */
         function calculateImpliedVol(params) {
             const { marketPrice } = params;
             if (!marketPrice || marketPrice <= 0) return null;
@@ -232,9 +388,6 @@
             return null;
         }
 
-        /**
-         * Calcula el breakeven price al vencimiento
-         */
         function calculateBreakeven(type, strike, premium, conversionRatio) {
             const premiumPerUnit = premium / conversionRatio;
             return type === 'call' 
@@ -242,9 +395,6 @@
                 : strike - premiumPerUnit;
         }
 
-        /**
-         * Determina el estado de moneyness
-         */
         function getMoneyness(type, spot, strike) {
             const ratio = spot / strike;
             if (type === 'call') {
@@ -258,12 +408,8 @@
             }
         }
 
-        // ==================== VALIDACIÓN PURA (SIN SIDE EFFECTS) ====================
+        // ==================== VALIDACIÓN PURA ====================
 
-        /**
-         * Función de validación PURA - no modifica estado
-         * @returns Array de errores
-         */
         function validateInputs(spot, strike, daysToExpiration, riskFreeRate, dividendYield, conversionRatio, calculationMode, volatility, marketPrice) {
             const errors = [];
 
@@ -286,8 +432,8 @@
                 errors.push({ field: 'days', message: 'Rango 1-3650 días' });
             }
 
-            if (isNaN(riskFreeNum) || riskFreeNum < 0 || riskFreeNum > 50) {
-                errors.push({ field: 'riskFree', message: 'Rango 0-50%' });
+            if (isNaN(riskFreeNum) || riskFreeNum < -1 || riskFreeNum > 50) {
+                errors.push({ field: 'riskFree', message: 'Rango -1% a 50%' });
             }
 
             if (isNaN(divYieldNum) || divYieldNum < 0 || divYieldNum > 20) {
@@ -316,19 +462,39 @@
         // ==================== COMPONENTE PRINCIPAL ====================
 
         const WarrantCalculator = () => {
+            // Estado del activo subyacente
+            const [selectedAsset, setSelectedAsset] = useState('EUROSTOXX50');
+            const [autoFillEnabled, setAutoFillEnabled] = useState(true);
+
             // Estados de inputs
             const [warrantType, setWarrantType] = useState('put');
-            const [spot, setSpot] = useState('6000');
-            const [strike, setStrike] = useState('6500');
+            const [spot, setSpot] = useState('4950');
+            const [strike, setStrike] = useState('5000');
             const [daysToExpiration, setDaysToExpiration] = useState('30');
-            const [riskFreeRate, setRiskFreeRate] = useState('4.5');
-            const [dividendYield, setDividendYield] = useState('1.5');
+            const [riskFreeRate, setRiskFreeRate] = useState('2.5');
+            const [dividendYield, setDividendYield] = useState('2.8');
             const [conversionRatio, setConversionRatio] = useState('0.001');
             const [calculationMode, setCalculationMode] = useState('volatility');
-            const [volatility, setVolatility] = useState('20');
+            const [volatility, setVolatility] = useState('16');
             const [marketPrice, setMarketPrice] = useState('');
 
-            // CORRECCIÓN: Validación como useMemo puro (sin side effects)
+            // Efecto para auto-rellenar cuando cambia el activo
+            useEffect(() => {
+                if (autoFillEnabled && selectedAsset !== 'CUSTOM') {
+                    const asset = UNDERLYING_ASSETS[selectedAsset];
+                    if (asset) {
+                        setSpot(asset.spotPrice.toString());
+                        setRiskFreeRate(asset.riskFreeRate.toString());
+                        setDividendYield(asset.dividendYield.toString());
+                        setVolatility(asset.volatility.toString());
+                        // Ajustar strike cerca del spot
+                        const roundedStrike = Math.round(asset.spotPrice / 100) * 100;
+                        setStrike(roundedStrike.toString());
+                    }
+                }
+            }, [selectedAsset, autoFillEnabled]);
+
+            // Validación
             const errors = useMemo(() => {
                 return validateInputs(
                     spot, strike, daysToExpiration, riskFreeRate, 
@@ -482,6 +648,8 @@
 
             const getError = (field) => errors.find(e => e.field === field)?.message;
 
+            const currentAsset = UNDERLYING_ASSETS[selectedAsset];
+
             // Custom Tooltip
             const CustomTooltip = ({ active, payload, label }) => {
                 if (active && payload && payload.length) {
@@ -512,7 +680,7 @@
                                     Calculadora de warrants sobre índices – Black-Scholes Model
                                 </p>
                             </div>
-                            <span className="text-xs text-[#94A3B8]">v1.2</span>
+                            <span className="text-xs text-[#94A3B8]">v2.0</span>
                         </div>
                     </header>
 
@@ -523,6 +691,70 @@
                             {/* Input Panel */}
                             <div className="lg:col-span-2">
                                 <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-6 sticky top-6">
+                                    
+                                    {/* ===== NUEVO: Selector de Activo Subyacente ===== */}
+                                    <div className="mb-6 p-4 bg-[#0A0E27] rounded-lg border border-[#3B82F6]">
+                                        <div className="flex justify-between items-center mb-3">
+                                            <label className="text-sm font-semibold text-[#3B82F6]">
+                                                Activo Subyacente
+                                            </label>
+                                            <label className="flex items-center text-xs text-[#94A3B8] cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={autoFillEnabled}
+                                                    onChange={(e) => setAutoFillEnabled(e.target.checked)}
+                                                    className="mr-2 w-4 h-4 accent-[#3B82F6]"
+                                                />
+                                                Auto-rellenar
+                                            </label>
+                                        </div>
+                                        
+                                        <select
+                                            value={selectedAsset}
+                                            onChange={(e) => setSelectedAsset(e.target.value)}
+                                            className="w-full bg-[#151B3D] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6] mb-3"
+                                        >
+                                            {Object.entries(ASSET_GROUPS).map(([group, assets]) => (
+                                                <optgroup key={group} label={group}>
+                                                    {assets.map(assetKey => (
+                                                        <option key={assetKey} value={assetKey}>
+                                                            {UNDERLYING_ASSETS[assetKey].name}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                            ))}
+                                        </select>
+
+                                        {/* Info del activo seleccionado */}
+                                        {currentAsset && !currentAsset.isCustom && (
+                                            <div className="text-xs text-[#64748B] space-y-1">
+                                                <p>{currentAsset.description}</p>
+                                                <div className="flex flex-wrap gap-2 mt-2">
+                                                    <span className="px-2 py-0.5 bg-[#334155] rounded">
+                                                        {currentAsset.currency}
+                                                    </span>
+                                                    <span className="px-2 py-0.5 bg-[#334155] rounded">
+                                                        Div: {currentAsset.dividendYield}%
+                                                    </span>
+                                                    <span className="px-2 py-0.5 bg-[#334155] rounded">
+                                                        Vol: {currentAsset.volatility}%
+                                                    </span>
+                                                    {currentAsset.volIndex && (
+                                                        <span className="px-2 py-0.5 bg-[#1E3A5F] rounded text-[#3B82F6]">
+                                                            {currentAsset.volIndex}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {currentAsset?.isCustom && (
+                                            <p className="text-xs text-[#F59E0B]">
+                                                ⚠️ Modo personalizado: introduce todos los valores manualmente
+                                            </p>
+                                        )}
+                                    </div>
+
                                     <h2 className="text-lg font-semibold mb-4 text-[#E2E8F0]">
                                         Parámetros del Warrant
                                     </h2>
@@ -560,14 +792,15 @@
                                     <div className="space-y-4">
                                         <div>
                                             <label className="block text-sm font-medium text-[#94A3B8] mb-1">
-                                                Spot Price (S) - Precio actual del índice
+                                                Spot Price (S) 
+                                                <span className="text-[#64748B] ml-1">({currentAsset?.currency || 'EUR'})</span>
                                             </label>
                                             <input
                                                 type="number"
                                                 value={spot}
                                                 onChange={(e) => setSpot(e.target.value)}
                                                 className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                                                step="1"
+                                                step="0.01"
                                             />
                                             {getError('spot') && <p className="text-[#EF4444] text-xs mt-1">{getError('spot')}</p>}
                                         </div>
@@ -581,7 +814,7 @@
                                                 value={strike}
                                                 onChange={(e) => setStrike(e.target.value)}
                                                 className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                                                step="1"
+                                                step="0.01"
                                             />
                                             {getError('strike') && <p className="text-[#EF4444] text-xs mt-1">{getError('strike')}</p>}
                                         </div>
@@ -610,7 +843,11 @@
                                                     type="number"
                                                     value={riskFreeRate}
                                                     onChange={(e) => setRiskFreeRate(e.target.value)}
-                                                    className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                    className={`w-full bg-[#0A0E27] border rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6] ${
+                                                        autoFillEnabled && selectedAsset !== 'CUSTOM' 
+                                                            ? 'border-[#3B82F6] border-opacity-50' 
+                                                            : 'border-[#334155]'
+                                                    }`}
                                                     step="0.1"
                                                 />
                                                 {getError('riskFree') && <p className="text-[#EF4444] text-xs mt-1">{getError('riskFree')}</p>}
@@ -624,7 +861,11 @@
                                                     type="number"
                                                     value={dividendYield}
                                                     onChange={(e) => setDividendYield(e.target.value)}
-                                                    className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                    className={`w-full bg-[#0A0E27] border rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6] ${
+                                                        autoFillEnabled && selectedAsset !== 'CUSTOM' 
+                                                            ? 'border-[#3B82F6] border-opacity-50' 
+                                                            : 'border-[#334155]'
+                                                    }`}
                                                     step="0.1"
                                                 />
                                                 {getError('dividend') && <p className="text-[#EF4444] text-xs mt-1">{getError('dividend')}</p>}
@@ -632,8 +873,8 @@
                                         </div>
 
                                         {/* Conversion Ratio */}
-                                        <div className="bg-[#0A0E27] p-3 rounded border border-[#3B82F6]">
-                                            <label className="block text-sm font-medium text-[#3B82F6] mb-1">
+                                        <div>
+                                            <label className="block text-sm font-medium text-[#94A3B8] mb-1">
                                                 Ratio de Conversión
                                                 <span className="text-xs text-[#64748B] ml-2 font-normal">(Ver ficha warrant)</span>
                                             </label>
@@ -641,7 +882,7 @@
                                                 type="number"
                                                 value={conversionRatio}
                                                 onChange={(e) => setConversionRatio(e.target.value)}
-                                                className="w-full bg-[#151B3D] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
                                                 step="0.001"
                                                 min="0.0001"
                                             />
@@ -671,17 +912,26 @@
                                             <div>
                                                 <label className="block text-sm font-medium text-[#94A3B8] mb-1">
                                                     Volatilidad (%)
+                                                    {currentAsset?.volIndex && (
+                                                        <span className="text-xs text-[#3B82F6] ml-2">
+                                                            Ref: {currentAsset.volIndex}
+                                                        </span>
+                                                    )}
                                                 </label>
                                                 <input
                                                     type="number"
                                                     value={volatility}
                                                     onChange={(e) => setVolatility(e.target.value)}
-                                                    className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                    className={`w-full bg-[#0A0E27] border rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6] ${
+                                                        autoFillEnabled && selectedAsset !== 'CUSTOM' 
+                                                            ? 'border-[#3B82F6] border-opacity-50' 
+                                                            : 'border-[#334155]'
+                                                    }`}
                                                     step="0.5"
                                                 />
                                                 {getError('volatility') && <p className="text-[#EF4444] text-xs mt-1">{getError('volatility')}</p>}
-                                                {parseFloat(volatility) > 100 && !getError('volatility') && (
-                                                    <p className="text-[#F59E0B] text-xs mt-1">⚠️ Volatilidad superior al 100%</p>
+                                                {parseFloat(volatility) > 50 && !getError('volatility') && (
+                                                    <p className="text-[#F59E0B] text-xs mt-1">⚠️ Volatilidad elevada - verificar datos</p>
                                                 )}
                                             </div>
                                         ) : (
@@ -700,6 +950,14 @@
                                                 {getError('marketPrice') && <p className="text-[#EF4444] text-xs mt-1">{getError('marketPrice')}</p>}
                                             </div>
                                         )}
+                                    </div>
+
+                                    {/* Disclaimer datos */}
+                                    <div className="mt-4 p-3 bg-[#0A0E27] rounded border border-[#334155]">
+                                        <p className="text-xs text-[#64748B]">
+                                            ⚠️ Los datos de mercado son orientativos (Dic 2024). 
+                                            Verifica siempre los valores actuales antes de operar.
+                                        </p>
                                     </div>
                                 </div>
                             </div>
@@ -773,6 +1031,9 @@
                                         <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-6">
                                             <h3 className="text-lg font-semibold mb-4 text-[#E2E8F0]">
                                                 Payoff Diagram at Expiration
+                                                <span className="text-sm font-normal text-[#64748B] ml-2">
+                                                    ({currentAsset?.name || 'Custom'})
+                                                </span>
                                             </h3>
                                             <ResponsiveContainer width="100%" height={300}>
                                                 <LineChart data={payoffData}>
@@ -881,7 +1142,7 @@
                     <footer className="bg-[#151B3D] border-t border-[#334155] px-6 py-4 mt-12">
                         <div className="max-w-7xl mx-auto">
                             <p className="text-xs text-[#94A3B8] text-center">
-                                European Warrant Calculator v1.2 | Black-Scholes Model | Solo para fines educativos
+                                European Warrant Calculator v2.0 | Black-Scholes Model | Solo para fines educativos
                             </p>
                             <p className="text-xs text-[#64748B] text-center mt-1">
                                 Los warrants son productos apalancados de alto riesgo. Esto no constituye asesoramiento financiero.
