@@ -32,768 +32,929 @@
         code, .font-mono {
             font-family: 'Monaco', 'Courier New', monospace;
         }
+
+        /* Custom scrollbar for dark theme */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0A0E27;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useMemo } = React;
         const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } = Recharts;
 
-        // ==================== INTERFACES ====================
+        // ==================== CONSTANTES ====================
+        
+        const COLORS = {
+            bgPrimary: '#0A0E27',
+            bgSecondary: '#151B3D',
+            bgCard: '#1E293B',
+            accent: '#3B82F6',
+            textPrimary: '#E2E8F0',
+            textSecondary: '#94A3B8',
+            success: '#10B981',
+            error: '#EF4444',
+            warning: '#F59E0B',
+            border: '#334155',
+        };
 
-        // TypeScript interfaces (comentadas para JavaScript)
-        // interface WarrantInputs
-        // interface WarrantResults
-        // interface ValidationError
-
-        // ==================== MATEMÁTICAS ====================
+        // ==================== MATEMÁTICAS FINANCIERAS ====================
 
         /**
          * Aproximación de la función de distribución acumulada normal estándar
-         * Método: Abramowitz-Stegun
+         * Método: Abramowitz-Stegun (precisión ~7.5×10^-8)
+         * Referencia: Handbook of Mathematical Functions, 1964
          */
         function normalCDF(x) {
-          if (x < -10) return 0;
-          if (x > 10) return 1;
+            if (x < -10) return 0;
+            if (x > 10) return 1;
 
-          const t = 1 / (1 + 0.2316419 * Math.abs(x));
-          const d = 0.3989423 * Math.exp(-x * x / 2);
-          const prob = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+            const a1 = 0.319381530;
+            const a2 = -0.356563782;
+            const a3 = 1.781477937;
+            const a4 = -1.821255978;
+            const a5 = 1.330274429;
+            const p = 0.2316419;
 
-          return x > 0 ? 1 - prob : prob;
+            const t = 1 / (1 + p * Math.abs(x));
+            const d = (1 / Math.sqrt(2 * Math.PI)) * Math.exp(-x * x / 2);
+            const prob = d * t * (a1 + t * (a2 + t * (a3 + t * (a4 + t * a5))));
+
+            return x > 0 ? 1 - prob : prob;
         }
 
         /**
          * Cálculo de d1 para fórmula Black-Scholes
+         * d1 = [ln(S/K) + (r - q + σ²/2)·T] / (σ·√T)
          */
-        function calculateD1(spot, strike, timeToExpiration, riskFreeRate, dividendYield, volatility) {
-          const numerator = Math.log(spot / strike) +
-            (riskFreeRate - dividendYield + (volatility * volatility) / 2) * timeToExpiration;
-          const denominator = volatility * Math.sqrt(timeToExpiration);
-          return numerator / denominator;
+        function calculateD1(spot, strike, T, r, q, sigma) {
+            const numerator = Math.log(spot / strike) + (r - q + (sigma * sigma) / 2) * T;
+            const denominator = sigma * Math.sqrt(T);
+            return numerator / denominator;
         }
 
         /**
          * Cálculo de d2 para fórmula Black-Scholes
+         * d2 = d1 - σ·√T
          */
-        function calculateD2(d1, volatility, timeToExpiration) {
-          return d1 - volatility * Math.sqrt(timeToExpiration);
+        function calculateD2(d1, sigma, T) {
+            return d1 - sigma * Math.sqrt(T);
         }
 
         /**
          * Modelo Black-Scholes para opciones/warrants europeos
-         * @returns Precio teórico del warrant
+         * Call: S·e^(-q·T)·N(d1) - K·e^(-r·T)·N(d2)
+         * Put:  K·e^(-r·T)·N(-d2) - S·e^(-q·T)·N(-d1)
+         * 
+         * @returns Precio teórico de la opción (sin ajuste de ratio)
          */
         function blackScholes(params) {
-          const {
-            type,
-            spot,
-            strike,
-            daysToExpiration,
-            riskFreeRate,
-            dividendYield,
-            volatility
-          } = params;
+            const { type, spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility } = params;
 
-          if (!volatility) return 0;
+            if (!volatility || volatility <= 0) return 0;
 
-          const T = daysToExpiration / 365.25;
-          const r = riskFreeRate / 100;
-          const q = dividendYield / 100;
-          const sigma = volatility / 100;
+            const T = daysToExpiration / 365.25;
+            const r = riskFreeRate / 100;
+            const q = dividendYield / 100;
+            const sigma = volatility / 100;
 
-          if (T <= 0) {
-            // Al vencimiento
-            if (type === 'call') {
-              return Math.max(0, spot - strike);
-            } else {
-              return Math.max(0, strike - spot);
+            // Al vencimiento: valor intrínseco
+            if (T <= 0) {
+                return type === 'call' 
+                    ? Math.max(0, spot - strike) 
+                    : Math.max(0, strike - spot);
             }
-          }
 
-          const d1 = calculateD1(spot, strike, T, r, q, sigma);
-          const d2 = calculateD2(d1, sigma, T);
+            const d1 = calculateD1(spot, strike, T, r, q, sigma);
+            const d2 = calculateD2(d1, sigma, T);
 
-          const Nd1 = normalCDF(d1);
-          const Nd2 = normalCDF(d2);
-          const NminusD1 = normalCDF(-d1);
-          const NminusD2 = normalCDF(-d2);
-
-          if (type === 'call') {
-            return spot * Math.exp(-q * T) * Nd1 - strike * Math.exp(-r * T) * Nd2;
-          } else {
-            return strike * Math.exp(-r * T) * NminusD2 - spot * Math.exp(-q * T) * NminusD1;
-          }
+            if (type === 'call') {
+                return spot * Math.exp(-q * T) * normalCDF(d1) - strike * Math.exp(-r * T) * normalCDF(d2);
+            } else {
+                return strike * Math.exp(-r * T) * normalCDF(-d2) - spot * Math.exp(-q * T) * normalCDF(-d1);
+            }
         }
 
         /**
          * Cálculo de Delta (sensibilidad al precio del subyacente)
+         * Call Delta: e^(-q·T) · N(d1)
+         * Put Delta:  e^(-q·T) · [N(d1) - 1]
          */
         function calculateDelta(params) {
-          const {
-            type,
-            spot,
-            strike,
-            daysToExpiration,
-            riskFreeRate,
-            dividendYield,
-            volatility
-          } = params;
+            const { type, spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility } = params;
 
-          if (!volatility) return 0;
+            if (!volatility || volatility <= 0) return 0;
 
-          const T = daysToExpiration / 365.25;
-          const r = riskFreeRate / 100;
-          const q = dividendYield / 100;
-          const sigma = volatility / 100;
+            const T = daysToExpiration / 365.25;
+            const r = riskFreeRate / 100;
+            const q = dividendYield / 100;
+            const sigma = volatility / 100;
 
-          if (T <= 0) {
-            if (type === 'call') {
-              return spot > strike ? 1 : 0;
-            } else {
-              return spot < strike ? -1 : 0;
+            // Al vencimiento: delta binario
+            if (T <= 0) {
+                if (type === 'call') return spot > strike ? 1 : 0;
+                return spot < strike ? -1 : 0;
             }
-          }
 
-          const d1 = calculateD1(spot, strike, T, r, q, sigma);
-          const Nd1 = normalCDF(d1);
+            const d1 = calculateD1(spot, strike, T, r, q, sigma);
+            const Nd1 = normalCDF(d1);
 
-          if (type === 'call') {
-            return Math.exp(-q * T) * Nd1;
-          } else {
-            return Math.exp(-q * T) * (Nd1 - 1);
-          }
+            return type === 'call' 
+                ? Math.exp(-q * T) * Nd1 
+                : Math.exp(-q * T) * (Nd1 - 1);
         }
 
         /**
-         * Cálculo de Vega (para Newton-Raphson en IV)
+         * Cálculo de Vega (sensibilidad a la volatilidad)
+         * Vega = S · e^(-q·T) · √T · φ(d1)
+         * donde φ(x) = PDF normal estándar
          */
         function calculateVega(params) {
-          const {
-            spot,
-            strike,
-            daysToExpiration,
-            riskFreeRate,
-            dividendYield,
-            volatility
-          } = params;
+            const { spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility } = params;
 
-          if (!volatility) return 0;
+            if (!volatility || volatility <= 0) return 0;
 
-          const T = daysToExpiration / 365.25;
-          const r = riskFreeRate / 100;
-          const q = dividendYield / 100;
-          const sigma = volatility / 100;
+            const T = daysToExpiration / 365.25;
+            const r = riskFreeRate / 100;
+            const q = dividendYield / 100;
+            const sigma = volatility / 100;
 
-          if (T <= 0) return 0;
+            if (T <= 0) return 0;
 
-          const d1 = calculateD1(spot, strike, T, r, q, sigma);
-          const vega = spot * Math.exp(-q * T) * Math.sqrt(T) *
-            (1 / Math.sqrt(2 * Math.PI)) * Math.exp(-d1 * d1 / 2);
+            const d1 = calculateD1(spot, strike, T, r, q, sigma);
+            const pdf = (1 / Math.sqrt(2 * Math.PI)) * Math.exp(-d1 * d1 / 2);
+            const vega = spot * Math.exp(-q * T) * Math.sqrt(T) * pdf;
 
-          return vega / 100; // Vega por 1% de cambio en volatilidad
+            return vega / 100; // Por 1% de cambio en volatilidad
         }
 
         /**
          * Cálculo de Volatilidad Implícita mediante Newton-Raphson
+         * Iteración: σ_new = σ_old - (BS_price - market_price) / vega
+         * 
          * @returns Volatilidad implícita en % o null si no converge
          */
         function calculateImpliedVol(params) {
-          const { marketPrice } = params;
-          if (!marketPrice || marketPrice <= 0) return null;
+            const { marketPrice } = params;
+            if (!marketPrice || marketPrice <= 0) return null;
 
-          let sigma = 20; // Initial guess: 20%
-          const maxIterations = 50;
-          const tolerance = 0.0001;
+            let sigma = 20; // Initial guess: 20%
+            const maxIterations = 50;
+            const tolerance = 0.0001;
 
-          for (let i = 0; i < maxIterations; i++) {
-            const paramsWithVol = { ...params, volatility: sigma };
-            const theoreticalPrice = blackScholes(paramsWithVol);
-            const diff = theoreticalPrice - marketPrice;
+            for (let i = 0; i < maxIterations; i++) {
+                const paramsWithVol = { ...params, volatility: sigma };
+                const theoreticalPrice = blackScholes(paramsWithVol);
+                const diff = theoreticalPrice - marketPrice;
 
-            if (Math.abs(diff) < tolerance) {
-              return sigma;
+                if (Math.abs(diff) < tolerance) {
+                    return sigma;
+                }
+
+                const vega = calculateVega(paramsWithVol);
+
+                if (vega === 0 || !isFinite(vega)) {
+                    // Intentar ajustar sigma manualmente si vega es 0
+                    sigma = diff > 0 ? sigma * 0.9 : sigma * 1.1;
+                    continue;
+                }
+
+                sigma = sigma - (diff / vega);
+
+                // Limitar sigma a rangos razonables
+                if (sigma < 0.1) sigma = 0.1;
+                if (sigma > 500) sigma = 500;
             }
 
-            const vega = calculateVega(paramsWithVol);
-
-            if (vega === 0 || !isFinite(vega)) {
-              return null;
-            }
-
-            sigma = sigma - (diff / vega);
-
-            // Limitar sigma a rangos razonables
-            if (sigma < 0.1) sigma = 0.1;
-            if (sigma > 500) sigma = 500;
-          }
-
-          return null; // No convergió
+            return null; // No convergió
         }
 
         /**
          * Calcula el breakeven price al vencimiento
+         * CORREGIDO: Para warrants, el premium se escala por el ratio
+         * 
+         * Call Breakeven: Strike + (Premium / Ratio)
+         * Put Breakeven:  Strike - (Premium / Ratio)
          */
-        function calculateBreakeven(type, strike, premium) {
-          if (type === 'call') {
-            return strike + premium;
-          } else {
-            return strike - premium;
-          }
+        function calculateBreakeven(type, strike, premium, conversionRatio) {
+            // Premium ya está en términos del warrant (precio × ratio)
+            // Para el breakeven necesitamos el valor por unidad de índice
+            const premiumPerUnit = premium / conversionRatio;
+            
+            if (type === 'call') {
+                return strike + premiumPerUnit;
+            } else {
+                return strike - premiumPerUnit;
+            }
+        }
+
+        /**
+         * Determina el estado de moneyness del warrant
+         */
+        function getMoneyness(type, spot, strike) {
+            const ratio = spot / strike;
+            if (type === 'call') {
+                if (ratio > 1.02) return { status: 'ITM', color: COLORS.success };
+                if (ratio < 0.98) return { status: 'OTM', color: COLORS.error };
+                return { status: 'ATM', color: COLORS.warning };
+            } else {
+                if (ratio < 0.98) return { status: 'ITM', color: COLORS.success };
+                if (ratio > 1.02) return { status: 'OTM', color: COLORS.error };
+                return { status: 'ATM', color: COLORS.warning };
+            }
         }
 
         // ==================== COMPONENTE PRINCIPAL ====================
 
         const WarrantCalculator = () => {
-          // Estados
-          const [warrantType, setWarrantType] = useState('put');
-          const [spot, setSpot] = useState('6000');
-          const [strike, setStrike] = useState('6500');
-          const [daysToExpiration, setDaysToExpiration] = useState('30');
-          const [riskFreeRate, setRiskFreeRate] = useState('4.5');
-          const [dividendYield, setDividendYield] = useState('1.5');
-          const [calculationMode, setCalculationMode] = useState('volatility');
-          const [volatility, setVolatility] = useState('20');
-          const [marketPrice, setMarketPrice] = useState('');
-          const [errors, setErrors] = useState([]);
+            // Estados de inputs
+            const [warrantType, setWarrantType] = useState('put');
+            const [spot, setSpot] = useState('6000');
+            const [strike, setStrike] = useState('6500');
+            const [daysToExpiration, setDaysToExpiration] = useState('30');
+            const [riskFreeRate, setRiskFreeRate] = useState('4.5');
+            const [dividendYield, setDividendYield] = useState('1.5');
+            const [conversionRatio, setConversionRatio] = useState('0.001'); // Típico BNP Paribas
+            const [calculationMode, setCalculationMode] = useState('volatility');
+            const [volatility, setVolatility] = useState('20');
+            const [marketPrice, setMarketPrice] = useState('');
+            const [errors, setErrors] = useState([]);
 
-          // Validaciones
-          const validate = () => {
-            const newErrors = [];
+            // Validaciones
+            const validate = () => {
+                const newErrors = [];
 
-            const spotNum = parseFloat(spot);
-            const strikeNum = parseFloat(strike);
-            const daysNum = parseInt(daysToExpiration);
-            const riskFreeNum = parseFloat(riskFreeRate);
-            const divYieldNum = parseFloat(dividendYield);
+                const spotNum = parseFloat(spot);
+                const strikeNum = parseFloat(strike);
+                const daysNum = parseInt(daysToExpiration);
+                const riskFreeNum = parseFloat(riskFreeRate);
+                const divYieldNum = parseFloat(dividendYield);
+                const ratioNum = parseFloat(conversionRatio);
 
-            if (isNaN(spotNum) || spotNum <= 0) {
-              newErrors.push({ field: 'spot', message: 'Debe ser positivo' });
-            }
+                if (isNaN(spotNum) || spotNum <= 0) {
+                    newErrors.push({ field: 'spot', message: 'Debe ser positivo' });
+                }
 
-            if (isNaN(strikeNum) || strikeNum <= 0) {
-              newErrors.push({ field: 'strike', message: 'Debe ser positivo' });
-            }
+                if (isNaN(strikeNum) || strikeNum <= 0) {
+                    newErrors.push({ field: 'strike', message: 'Debe ser positivo' });
+                }
 
-            if (isNaN(daysNum) || daysNum < 1 || daysNum > 3650) {
-              newErrors.push({ field: 'days', message: 'Rango 1-3650 días' });
-            }
+                if (isNaN(daysNum) || daysNum < 1 || daysNum > 3650) {
+                    newErrors.push({ field: 'days', message: 'Rango 1-3650 días' });
+                }
 
-            if (isNaN(riskFreeNum) || riskFreeNum < 0 || riskFreeNum > 50) {
-              newErrors.push({ field: 'riskFree', message: 'Rango 0-50%' });
-            }
+                if (isNaN(riskFreeNum) || riskFreeNum < 0 || riskFreeNum > 50) {
+                    newErrors.push({ field: 'riskFree', message: 'Rango 0-50%' });
+                }
 
-            if (isNaN(divYieldNum) || divYieldNum < 0 || divYieldNum > 20) {
-              newErrors.push({ field: 'dividend', message: 'Rango 0-20%' });
-            }
+                if (isNaN(divYieldNum) || divYieldNum < 0 || divYieldNum > 20) {
+                    newErrors.push({ field: 'dividend', message: 'Rango 0-20%' });
+                }
 
-            if (calculationMode === 'volatility') {
-              const volNum = parseFloat(volatility);
-              if (isNaN(volNum) || volNum < 1 || volNum > 200) {
-                newErrors.push({ field: 'volatility', message: 'Rango 1-200%' });
-              }
-            } else {
-              const priceNum = parseFloat(marketPrice);
-              if (isNaN(priceNum) || priceNum <= 0) {
-                newErrors.push({ field: 'marketPrice', message: 'Debe ser positivo' });
-              }
-            }
+                if (isNaN(ratioNum) || ratioNum <= 0 || ratioNum > 1000) {
+                    newErrors.push({ field: 'ratio', message: 'Debe ser positivo (ej: 0.001, 0.01, 1)' });
+                }
 
-            setErrors(newErrors);
-            return newErrors.length === 0;
-          };
+                if (calculationMode === 'volatility') {
+                    const volNum = parseFloat(volatility);
+                    if (isNaN(volNum) || volNum < 1 || volNum > 200) {
+                        newErrors.push({ field: 'volatility', message: 'Rango 1-200%' });
+                    }
+                } else {
+                    const priceNum = parseFloat(marketPrice);
+                    if (isNaN(priceNum) || priceNum <= 0) {
+                        newErrors.push({ field: 'marketPrice', message: 'Debe ser positivo' });
+                    }
+                }
 
-          // Cálculo de resultados
-          const results = useMemo(() => {
-            if (!validate()) return null;
-
-            const inputs = {
-              type: warrantType,
-              spot: parseFloat(spot),
-              strike: parseFloat(strike),
-              daysToExpiration: parseInt(daysToExpiration),
-              riskFreeRate: parseFloat(riskFreeRate),
-              dividendYield: parseFloat(dividendYield),
+                setErrors(newErrors);
+                return newErrors.length === 0;
             };
 
-            let premium = 0;
-            let impliedVol;
+            // Cálculo de resultados
+            const results = useMemo(() => {
+                if (!validate()) return null;
 
-            if (calculationMode === 'volatility') {
-              inputs.volatility = parseFloat(volatility);
-              premium = blackScholes(inputs);
-            } else {
-              inputs.marketPrice = parseFloat(marketPrice);
-              const iv = calculateImpliedVol(inputs);
-              if (iv === null) {
-                return null;
-              }
-              impliedVol = iv;
-              inputs.volatility = iv;
-              premium = parseFloat(marketPrice);
-            }
+                const ratio = parseFloat(conversionRatio);
+                const spotNum = parseFloat(spot);
+                const strikeNum = parseFloat(strike);
 
-            const delta = calculateDelta(inputs);
-            const breakeven = calculateBreakeven(warrantType, inputs.strike, premium);
-            const moneyness = inputs.spot / inputs.strike;
-
-            let profitLoss = 0;
-            if (warrantType === 'call') {
-              profitLoss = Math.max(0, inputs.spot - inputs.strike) - premium;
-            } else {
-              profitLoss = Math.max(0, inputs.strike - inputs.spot) - premium;
-            }
-
-            return {
-              premium,
-              delta,
-              profitLoss,
-              breakeven,
-              moneyness,
-              impliedVol,
-            };
-          }, [
-            warrantType,
-            spot,
-            strike,
-            daysToExpiration,
-            riskFreeRate,
-            dividendYield,
-            calculationMode,
-            volatility,
-            marketPrice,
-          ]);
-
-          // Datos para gráfico de Payoff
-          const payoffData = useMemo(() => {
-            if (!results) return [];
-
-            const strikeNum = parseFloat(strike);
-            const premium = results.premium;
-            const minPrice = strikeNum * 0.7;
-            const maxPrice = strikeNum * 1.3;
-            const step = (maxPrice - minPrice) / 100;
-
-            const data = [];
-            for (let price = minPrice; price <= maxPrice; price += step) {
-              let payoff = 0;
-              if (warrantType === 'call') {
-                payoff = Math.max(0, price - strikeNum) - premium;
-              } else {
-                payoff = Math.max(0, strikeNum - price) - premium;
-              }
-              data.push({ price: parseFloat(price.toFixed(2)), payoff: parseFloat(payoff.toFixed(4)) });
-            }
-
-            return data;
-          }, [results, strike, warrantType]);
-
-          // Datos para gráfico de P&L Evolution
-          const plEvolutionData = useMemo(() => {
-            if (!results || calculationMode === 'impliedVol') return { data: [], timePoints: [] };
-
-            const spotNum = parseFloat(spot);
-            const strikeNum = parseFloat(strike);
-            const daysNum = parseInt(daysToExpiration);
-            const volNum = parseFloat(volatility);
-
-            const minPrice = strikeNum * 0.7;
-            const maxPrice = strikeNum * 1.3;
-            const step = (maxPrice - minPrice) / 50;
-
-            const timePoints = [
-              { days: Math.max(daysNum - 30, 1), label: 'T-30d' },
-              { days: Math.max(daysNum - 15, 1), label: 'T-15d' },
-              { days: Math.max(daysNum - 7, 1), label: 'T-7d' },
-              { days: 0, label: 'T-0 (Vencimiento)' },
-            ].filter(tp => tp.days <= daysNum);
-
-            const data = [];
-            for (let price = minPrice; price <= maxPrice; price += step) {
-              const point = { price: parseFloat(price.toFixed(2)) };
-
-              timePoints.forEach(tp => {
                 const inputs = {
-                  type: warrantType,
-                  spot: price,
-                  strike: strikeNum,
-                  daysToExpiration: tp.days,
-                  riskFreeRate: parseFloat(riskFreeRate),
-                  dividendYield: parseFloat(dividendYield),
-                  volatility: volNum,
+                    type: warrantType,
+                    spot: spotNum,
+                    strike: strikeNum,
+                    daysToExpiration: parseInt(daysToExpiration),
+                    riskFreeRate: parseFloat(riskFreeRate),
+                    dividendYield: parseFloat(dividendYield),
                 };
 
-                const value = blackScholes(inputs);
-                point[tp.label] = parseFloat(value.toFixed(4));
-              });
+                let premium = 0;
+                let impliedVol;
+                let usedVolatility;
 
-              data.push(point);
-            }
+                if (calculationMode === 'volatility') {
+                    usedVolatility = parseFloat(volatility);
+                    inputs.volatility = usedVolatility;
+                    // Precio teórico BS × ratio = precio del warrant
+                    premium = blackScholes(inputs) * ratio;
+                } else {
+                    // Market price del warrant / ratio = precio BS para calcular IV
+                    const marketPriceNum = parseFloat(marketPrice);
+                    const bsEquivalentPrice = marketPriceNum / ratio;
+                    inputs.marketPrice = bsEquivalentPrice;
+                    
+                    const iv = calculateImpliedVol(inputs);
+                    if (iv === null) {
+                        return null;
+                    }
+                    impliedVol = iv;
+                    usedVolatility = iv;
+                    inputs.volatility = iv;
+                    premium = marketPriceNum;
+                }
 
-            return { data, timePoints };
-          }, [results, spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility, warrantType, calculationMode]);
+                // Delta del warrant = Delta BS × ratio
+                const deltaBS = calculateDelta(inputs);
+                const deltaWarrant = deltaBS * ratio;
 
-          const getError = (field) => {
-            return errors.find(e => e.field === field)?.message;
-          };
+                // Breakeven CORREGIDO
+                const breakeven = calculateBreakeven(warrantType, strikeNum, premium, ratio);
 
-          return (
-            <div className="min-h-screen bg-[#0A0E27] text-[#E2E8F0] font-sans">
-              {/* Header */}
-              <header className="bg-[#151B3D] border-b border-[#334155] px-6 py-4">
-                <h1 className="text-2xl font-bold text-[#E2E8F0]">
-                  European Warrant Calculator
-                </h1>
-                <p className="text-sm text-[#94A3B8] mt-1">
-                  Calculadora de warrants sobre índices – Black-Scholes Model
-                </p>
-              </header>
+                // Moneyness
+                const moneyness = spotNum / strikeNum;
+                const moneynessInfo = getMoneyness(warrantType, spotNum, strikeNum);
 
-              {/* Main Content */}
-              <div className="container mx-auto px-4 py-6">
-                <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-                  {/* Input Panel */}
-                  <div className="lg:col-span-2">
-                    <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-6 sticky top-6">
-                      <h2 className="text-lg font-semibold mb-4 text-[#E2E8F0]">Inputs</h2>
+                // P&L al vencimiento SI el spot no cambia
+                // Valor intrínseco - premium pagado
+                let intrinsicValue = 0;
+                if (warrantType === 'call') {
+                    intrinsicValue = Math.max(0, spotNum - strikeNum) * ratio;
+                } else {
+                    intrinsicValue = Math.max(0, strikeNum - spotNum) * ratio;
+                }
+                const profitLoss = intrinsicValue - premium;
 
-                      {/* Call/Put Toggle */}
-                      <div className="mb-6">
-                        <label className="block text-sm font-medium text-[#94A3B8] mb-2">
-                          Tipo de Warrant
-                        </label>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setWarrantType('call')}
-                            className={`flex-1 py-2 px-4 rounded font-semibold transition-colors ${
-                              warrantType === 'call'
-                                ? 'bg-[#10B981] text-white'
-                                : 'bg-[#334155] text-[#94A3B8] hover:bg-[#475569]'
-                            }`}
-                          >
-                            CALL
-                          </button>
-                          <button
-                            onClick={() => setWarrantType('put')}
-                            className={`flex-1 py-2 px-4 rounded font-semibold transition-colors ${
-                              warrantType === 'put'
-                                ? 'bg-[#EF4444] text-white'
-                                : 'bg-[#334155] text-[#94A3B8] hover:bg-[#475569]'
-                            }`}
-                          >
-                            PUT
-                          </button>
-                        </div>
-                      </div>
+                return {
+                    premium,
+                    delta: deltaBS,
+                    deltaWarrant,
+                    profitLoss,
+                    breakeven,
+                    moneyness,
+                    moneynessInfo,
+                    impliedVol,
+                    usedVolatility,
+                    intrinsicValue,
+                    timeValue: premium - intrinsicValue,
+                };
+            }, [
+                warrantType, spot, strike, daysToExpiration, riskFreeRate,
+                dividendYield, conversionRatio, calculationMode, volatility, marketPrice,
+            ]);
 
-                      {/* Numeric Inputs */}
-                      <div className="space-y-4">
-                        <div>
-                          <label className="block text-sm font-medium text-[#94A3B8] mb-1">
-                            Spot Price (S)
-                          </label>
-                          <input
-                            type="number"
-                            value={spot}
-                            onChange={(e) => setSpot(e.target.value)}
-                            className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                            step="0.01"
-                          />
-                          {getError('spot') && (
-                            <p className="text-[#EF4444] text-xs mt-1">{getError('spot')}</p>
-                          )}
-                        </div>
+            // Datos para gráfico de Payoff
+            const payoffData = useMemo(() => {
+                if (!results) return [];
 
-                        <div>
-                          <label className="block text-sm font-medium text-[#94A3B8] mb-1">
-                            Strike Price (K)
-                          </label>
-                          <input
-                            type="number"
-                            value={strike}
-                            onChange={(e) => setStrike(e.target.value)}
-                            className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                            step="0.01"
-                          />
-                          {getError('strike') && (
-                            <p className="text-[#EF4444] text-xs mt-1">{getError('strike')}</p>
-                          )}
-                        </div>
+                const strikeNum = parseFloat(strike);
+                const ratio = parseFloat(conversionRatio);
+                const premium = results.premium;
+                const minPrice = strikeNum * 0.7;
+                const maxPrice = strikeNum * 1.3;
+                const step = (maxPrice - minPrice) / 100;
 
-                        <div>
-                          <label className="block text-sm font-medium text-[#94A3B8] mb-1">
-                            Days to Expiration
-                          </label>
-                          <input
-                            type="number"
-                            value={daysToExpiration}
-                            onChange={(e) => setDaysToExpiration(e.target.value)}
-                            className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                            step="1"
-                          />
-                          {getError('days') && (
-                            <p className="text-[#EF4444] text-xs mt-1">{getError('days')}</p>
-                          )}
-                        </div>
+                const data = [];
+                for (let price = minPrice; price <= maxPrice; price += step) {
+                    let intrinsic = 0;
+                    if (warrantType === 'call') {
+                        intrinsic = Math.max(0, price - strikeNum) * ratio;
+                    } else {
+                        intrinsic = Math.max(0, strikeNum - price) * ratio;
+                    }
+                    const payoff = intrinsic - premium;
+                    data.push({
+                        price: parseFloat(price.toFixed(2)),
+                        payoff: parseFloat(payoff.toFixed(4)),
+                    });
+                }
 
-                        <div>
-                          <label className="block text-sm font-medium text-[#94A3B8] mb-1">
-                            Risk-Free Rate (%)
-                          </label>
-                          <input
-                            type="number"
-                            value={riskFreeRate}
-                            onChange={(e) => setRiskFreeRate(e.target.value)}
-                            className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                            step="0.1"
-                          />
-                          {getError('riskFree') && (
-                            <p className="text-[#EF4444] text-xs mt-1">{getError('riskFree')}</p>
-                          )}
-                        </div>
+                return data;
+            }, [results, strike, warrantType, conversionRatio]);
 
-                        <div>
-                          <label className="block text-sm font-medium text-[#94A3B8] mb-1">
-                            Dividend Yield (%)
-                          </label>
-                          <input
-                            type="number"
-                            value={dividendYield}
-                            onChange={(e) => setDividendYield(e.target.value)}
-                            className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                            step="0.1"
-                          />
-                          {getError('dividend') && (
-                            <p className="text-[#EF4444] text-xs mt-1">{getError('dividend')}</p>
-                          )}
-                        </div>
-                      </div>
+            // Datos para gráfico de P&L Evolution (Theta Decay)
+            const plEvolutionData = useMemo(() => {
+                if (!results || calculationMode === 'impliedVol') {
+                    return { data: [], timePoints: [] };
+                }
 
-                      {/* Calculation Mode */}
-                      <div className="mt-6">
-                        <label className="block text-sm font-medium text-[#94A3B8] mb-2">
-                          Modo de Cálculo
-                        </label>
-                        <select
-                          value={calculationMode}
-                          onChange={(e) => setCalculationMode(e.target.value)}
-                          className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                        >
-                          <option value="volatility">Modo A: Input Volatility → Output Precio</option>
-                          <option value="impliedVol">Modo B: Input Market Price → Output IV</option>
-                        </select>
-                      </div>
+                const strikeNum = parseFloat(strike);
+                const ratio = parseFloat(conversionRatio);
+                const daysNum = parseInt(daysToExpiration);
+                const volNum = results.usedVolatility;
 
-                      {/* Conditional Input based on Mode */}
-                      <div className="mt-4">
-                        {calculationMode === 'volatility' ? (
-                          <div>
-                            <label className="block text-sm font-medium text-[#94A3B8] mb-1">
-                              Volatility (%)
-                            </label>
-                            <input
-                              type="number"
-                              value={volatility}
-                              onChange={(e) => setVolatility(e.target.value)}
-                              className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                              step="0.1"
-                            />
-                            {getError('volatility') && (
-                              <p className="text-[#EF4444] text-xs mt-1">{getError('volatility')}</p>
-                            )}
-                            {parseFloat(volatility) > 100 && !getError('volatility') && (
-                              <p className="text-[#F59E0B] text-xs mt-1">Warning: Volatilidad {'>'} 100%</p>
-                            )}
-                          </div>
-                        ) : (
-                          <div>
-                            <label className="block text-sm font-medium text-[#94A3B8] mb-1">
-                              Market Price (EUR)
-                            </label>
-                            <input
-                              type="number"
-                              value={marketPrice}
-                              onChange={(e) => setMarketPrice(e.target.value)}
-                              className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                              step="0.0001"
-                            />
-                            {getError('marketPrice') && (
-                              <p className="text-[#EF4444] text-xs mt-1">{getError('marketPrice')}</p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                const minPrice = strikeNum * 0.7;
+                const maxPrice = strikeNum * 1.3;
+                const step = (maxPrice - minPrice) / 50;
 
-                  {/* Results Panel */}
-                  <div className="lg:col-span-3 space-y-6">
-                    {/* Metrics Cards */}
-                    {results ? (
-                      <>
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                          <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
-                            <p className="text-sm text-[#94A3B8] mb-1">Premium</p>
-                            <p className="text-2xl font-mono font-bold text-[#3B82F6]">
-                              {results.premium.toFixed(4)} €
+                // Puntos temporales para mostrar theta decay
+                const allTimePoints = [
+                    { days: daysNum, label: 'Hoy' },
+                    { days: Math.max(Math.floor(daysNum * 0.66), 1), label: `T-${Math.floor(daysNum * 0.34)}d` },
+                    { days: Math.max(Math.floor(daysNum * 0.33), 1), label: `T-${Math.floor(daysNum * 0.66)}d` },
+                    { days: 0, label: 'Vencimiento' },
+                ];
+                
+                const timePoints = allTimePoints.filter((tp, idx) => 
+                    idx === 0 || idx === allTimePoints.length - 1 || tp.days < daysNum
+                );
+
+                const data = [];
+                for (let price = minPrice; price <= maxPrice; price += step) {
+                    const point = { price: parseFloat(price.toFixed(2)) };
+
+                    timePoints.forEach(tp => {
+                        const inputs = {
+                            type: warrantType,
+                            spot: price,
+                            strike: strikeNum,
+                            daysToExpiration: tp.days,
+                            riskFreeRate: parseFloat(riskFreeRate),
+                            dividendYield: parseFloat(dividendYield),
+                            volatility: volNum,
+                        };
+
+                        const value = blackScholes(inputs) * ratio;
+                        point[tp.label] = parseFloat(value.toFixed(4));
+                    });
+
+                    data.push(point);
+                }
+
+                return { data, timePoints };
+            }, [results, strike, daysToExpiration, riskFreeRate, dividendYield, warrantType, conversionRatio, calculationMode]);
+
+            const getError = (field) => {
+                return errors.find(e => e.field === field)?.message;
+            };
+
+            // Tooltip personalizado para gráficos
+            const CustomTooltip = ({ active, payload, label }) => {
+                if (active && payload && payload.length) {
+                    return (
+                        <div className="bg-[#1E293B] border border-[#334155] rounded p-3">
+                            <p className="text-[#E2E8F0] font-mono text-sm mb-1">
+                                Spot: {label}
                             </p>
-                          </div>
+                            {payload.map((entry, idx) => (
+                                <p key={idx} style={{ color: entry.color }} className="font-mono text-sm">
+                                    {entry.name}: {entry.value?.toFixed(4)} €
+                                </p>
+                            ))}
+                        </div>
+                    );
+                }
+                return null;
+            };
 
-                          <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
-                            <p className="text-sm text-[#94A3B8] mb-1">Delta</p>
-                            <p className={`text-2xl font-mono font-bold ${results.delta >= 0 ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
-                              {results.delta.toFixed(2)}
-                            </p>
-                          </div>
-
-                          <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
-                            <p className="text-sm text-[#94A3B8] mb-1">P&L at Expiration</p>
-                            <p className={`text-2xl font-mono font-bold ${results.profitLoss >= 0 ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
-                              {results.profitLoss.toFixed(4)} €
-                            </p>
-                          </div>
-
-                          <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
-                            <p className="text-sm text-[#94A3B8] mb-1">Breakeven Price</p>
-                            <p className="text-2xl font-mono font-bold text-[#E2E8F0]">
-                              {results.breakeven.toFixed(2)}
-                            </p>
-                          </div>
-
-                          <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
-                            <p className="text-sm text-[#94A3B8] mb-1">Moneyness (S/K)</p>
-                            <p className="text-2xl font-mono font-bold text-[#E2E8F0]">
-                              {results.moneyness.toFixed(4)}
-                            </p>
-                          </div>
-
-                          {results.impliedVol !== undefined && (
-                            <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
-                              <p className="text-sm text-[#94A3B8] mb-1">Implied Volatility</p>
-                              <p className="text-2xl font-mono font-bold text-[#3B82F6]">
-                                {results.impliedVol.toFixed(2)}%
-                              </p>
+            return (
+                <div className="min-h-screen bg-[#0A0E27] text-[#E2E8F0] font-sans">
+                    {/* Header */}
+                    <header className="bg-[#151B3D] border-b border-[#334155] px-6 py-4">
+                        <div className="max-w-7xl mx-auto flex justify-between items-center">
+                            <div>
+                                <h1 className="text-2xl font-bold text-[#E2E8F0]">
+                                    European Warrant Calculator
+                                </h1>
+                                <p className="text-sm text-[#94A3B8] mt-1">
+                                    Calculadora de warrants sobre índices – Black-Scholes Model
+                                </p>
                             </div>
-                          )}
+                            <div className="text-right">
+                                <span className="text-xs text-[#94A3B8]">v1.1</span>
+                            </div>
                         </div>
+                    </header>
 
-                        {/* Payoff Diagram */}
-                        <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-6">
-                          <h3 className="text-lg font-semibold mb-4 text-[#E2E8F0]">
-                            Payoff Diagram at Expiration
-                          </h3>
-                          <ResponsiveContainer width="100%" height={300}>
-                            <LineChart data={payoffData}>
-                              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                              <XAxis
-                                dataKey="price"
-                                stroke="#94A3B8"
-                                tick={{ fill: '#94A3B8' }}
-                                label={{ value: 'Precio Subyacente', position: 'insideBottom', offset: -5, fill: '#94A3B8' }}
-                              />
-                              <YAxis
-                                stroke="#94A3B8"
-                                tick={{ fill: '#94A3B8' }}
-                                label={{ value: 'Profit/Loss (€)', angle: -90, position: 'insideLeft', fill: '#94A3B8' }}
-                              />
-                              <Tooltip
-                                contentStyle={{
-                                  backgroundColor: '#1E293B',
-                                  border: '1px solid #334155',
-                                  borderRadius: '4px',
-                                  color: '#E2E8F0',
-                                }}
-                              />
-                              <ReferenceLine y={0} stroke="#94A3B8" strokeDasharray="3 3" />
-                              <ReferenceLine
-                                x={results.breakeven}
-                                stroke="#F59E0B"
-                                strokeDasharray="5 5"
-                                label={{ value: 'Breakeven', fill: '#F59E0B', position: 'top' }}
-                              />
-                              <Line
-                                type="monotone"
-                                dataKey="payoff"
-                                stroke={warrantType === 'call' ? '#10B981' : '#EF4444'}
-                                strokeWidth={2}
-                                dot={false}
-                              />
-                            </LineChart>
-                          </ResponsiveContainer>
+                    {/* Main Content */}
+                    <div className="max-w-7xl mx-auto px-4 py-6">
+                        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+                            
+                            {/* Input Panel */}
+                            <div className="lg:col-span-2">
+                                <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-6 sticky top-6">
+                                    <h2 className="text-lg font-semibold mb-4 text-[#E2E8F0]">
+                                        Parámetros del Warrant
+                                    </h2>
+
+                                    {/* Call/Put Toggle */}
+                                    <div className="mb-6">
+                                        <label className="block text-sm font-medium text-[#94A3B8] mb-2">
+                                            Tipo de Warrant
+                                        </label>
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={() => setWarrantType('call')}
+                                                className={`flex-1 py-2 px-4 rounded font-semibold transition-colors ${
+                                                    warrantType === 'call'
+                                                        ? 'bg-[#10B981] text-white'
+                                                        : 'bg-[#334155] text-[#94A3B8] hover:bg-[#475569]'
+                                                }`}
+                                            >
+                                                CALL
+                                            </button>
+                                            <button
+                                                onClick={() => setWarrantType('put')}
+                                                className={`flex-1 py-2 px-4 rounded font-semibold transition-colors ${
+                                                    warrantType === 'put'
+                                                        ? 'bg-[#EF4444] text-white'
+                                                        : 'bg-[#334155] text-[#94A3B8] hover:bg-[#475569]'
+                                                }`}
+                                            >
+                                                PUT
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Numeric Inputs */}
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-[#94A3B8] mb-1">
+                                                Spot Price (S) - Precio actual del índice
+                                            </label>
+                                            <input
+                                                type="number"
+                                                value={spot}
+                                                onChange={(e) => setSpot(e.target.value)}
+                                                className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                step="1"
+                                            />
+                                            {getError('spot') && (
+                                                <p className="text-[#EF4444] text-xs mt-1">{getError('spot')}</p>
+                                            )}
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-[#94A3B8] mb-1">
+                                                Strike Price (K)
+                                            </label>
+                                            <input
+                                                type="number"
+                                                value={strike}
+                                                onChange={(e) => setStrike(e.target.value)}
+                                                className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                step="1"
+                                            />
+                                            {getError('strike') && (
+                                                <p className="text-[#EF4444] text-xs mt-1">{getError('strike')}</p>
+                                            )}
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-[#94A3B8] mb-1">
+                                                Days to Expiration
+                                            </label>
+                                            <input
+                                                type="number"
+                                                value={daysToExpiration}
+                                                onChange={(e) => setDaysToExpiration(e.target.value)}
+                                                className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                step="1"
+                                                min="1"
+                                            />
+                                            {getError('days') && (
+                                                <p className="text-[#EF4444] text-xs mt-1">{getError('days')}</p>
+                                            )}
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-[#94A3B8] mb-1">
+                                                    Risk-Free Rate (%)
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    value={riskFreeRate}
+                                                    onChange={(e) => setRiskFreeRate(e.target.value)}
+                                                    className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                    step="0.1"
+                                                />
+                                                {getError('riskFree') && (
+                                                    <p className="text-[#EF4444] text-xs mt-1">{getError('riskFree')}</p>
+                                                )}
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm font-medium text-[#94A3B8] mb-1">
+                                                    Dividend Yield (%)
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    value={dividendYield}
+                                                    onChange={(e) => setDividendYield(e.target.value)}
+                                                    className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                    step="0.1"
+                                                />
+                                                {getError('dividend') && (
+                                                    <p className="text-[#EF4444] text-xs mt-1">{getError('dividend')}</p>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {/* Conversion Ratio - CRÍTICO PARA WARRANTS BNP */}
+                                        <div className="bg-[#0A0E27] p-3 rounded border border-[#3B82F6]">
+                                            <label className="block text-sm font-medium text-[#3B82F6] mb-1">
+                                                Ratio de Conversión
+                                                <span className="text-xs text-[#64748B] ml-2 font-normal">
+                                                    (Ver en ficha del warrant)
+                                                </span>
+                                            </label>
+                                            <input
+                                                type="number"
+                                                value={conversionRatio}
+                                                onChange={(e) => setConversionRatio(e.target.value)}
+                                                className="w-full bg-[#151B3D] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                step="0.001"
+                                                min="0.0001"
+                                            />
+                                            <p className="text-xs text-[#64748B] mt-1">
+                                                BNP típico: 0.001 (1/1000) o 0.01 (1/100)
+                                            </p>
+                                            {getError('ratio') && (
+                                                <p className="text-[#EF4444] text-xs mt-1">{getError('ratio')}</p>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Calculation Mode */}
+                                    <div className="mt-6 pt-4 border-t border-[#334155]">
+                                        <label className="block text-sm font-medium text-[#94A3B8] mb-2">
+                                            Modo de Cálculo
+                                        </label>
+                                        <select
+                                            value={calculationMode}
+                                            onChange={(e) => setCalculationMode(e.target.value)}
+                                            className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                        >
+                                            <option value="volatility">Modo A: Volatilidad → Precio teórico</option>
+                                            <option value="impliedVol">Modo B: Precio mercado → IV</option>
+                                        </select>
+                                    </div>
+
+                                    {/* Conditional Input based on Mode */}
+                                    <div className="mt-4">
+                                        {calculationMode === 'volatility' ? (
+                                            <div>
+                                                <label className="block text-sm font-medium text-[#94A3B8] mb-1">
+                                                    Volatilidad (%)
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    value={volatility}
+                                                    onChange={(e) => setVolatility(e.target.value)}
+                                                    className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                    step="0.5"
+                                                />
+                                                {getError('volatility') && (
+                                                    <p className="text-[#EF4444] text-xs mt-1">{getError('volatility')}</p>
+                                                )}
+                                                {parseFloat(volatility) > 100 && !getError('volatility') && (
+                                                    <p className="text-[#F59E0B] text-xs mt-1 flex items-center">
+                                                        ⚠️ Volatilidad superior al 100% - verificar datos
+                                                    </p>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <div>
+                                                <label className="block text-sm font-medium text-[#94A3B8] mb-1">
+                                                    Precio de Mercado del Warrant (EUR)
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    value={marketPrice}
+                                                    onChange={(e) => setMarketPrice(e.target.value)}
+                                                    className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                                                    step="0.0001"
+                                                    placeholder="Ej: 0.023"
+                                                />
+                                                {getError('marketPrice') && (
+                                                    <p className="text-[#EF4444] text-xs mt-1">{getError('marketPrice')}</p>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Results Panel */}
+                            <div className="lg:col-span-3 space-y-6">
+                                {/* Metrics Cards */}
+                                {results ? (
+                                    <>
+                                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                                            {/* Premium */}
+                                            <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
+                                                <p className="text-sm text-[#94A3B8] mb-1">Premium</p>
+                                                <p className="text-2xl font-mono font-bold text-[#3B82F6]">
+                                                    {results.premium.toFixed(4)} €
+                                                </p>
+                                                <p className="text-xs text-[#64748B] mt-1">
+                                                    Valor temporal: {results.timeValue >= 0 ? results.timeValue.toFixed(4) : '0.0000'} €
+                                                </p>
+                                            </div>
+
+                                            {/* Delta */}
+                                            <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
+                                                <p className="text-sm text-[#94A3B8] mb-1">Delta (BS)</p>
+                                                <p className={`text-2xl font-mono font-bold ${results.delta >= 0 ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
+                                                    {results.delta.toFixed(4)}
+                                                </p>
+                                                <p className="text-xs text-[#64748B] mt-1">
+                                                    Δ Warrant: {results.deltaWarrant.toFixed(6)}
+                                                </p>
+                                            </div>
+
+                                            {/* P&L at Expiration */}
+                                            <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
+                                                <p className="text-sm text-[#94A3B8] mb-1">P&L si Spot = {spot}</p>
+                                                <p className={`text-2xl font-mono font-bold ${results.profitLoss >= 0 ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
+                                                    {results.profitLoss >= 0 ? '+' : ''}{results.profitLoss.toFixed(4)} €
+                                                </p>
+                                                <p className="text-xs text-[#64748B] mt-1">
+                                                    V. Intrínseco: {results.intrinsicValue.toFixed(4)} €
+                                                </p>
+                                            </div>
+
+                                            {/* Breakeven */}
+                                            <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
+                                                <p className="text-sm text-[#94A3B8] mb-1">Breakeven</p>
+                                                <p className="text-2xl font-mono font-bold text-[#E2E8F0]">
+                                                    {results.breakeven.toFixed(2)}
+                                                </p>
+                                                <p className="text-xs text-[#64748B] mt-1">
+                                                    Precio necesario para P&L = 0
+                                                </p>
+                                            </div>
+
+                                            {/* Moneyness */}
+                                            <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
+                                                <p className="text-sm text-[#94A3B8] mb-1">Moneyness (S/K)</p>
+                                                <p className="text-2xl font-mono font-bold text-[#E2E8F0]">
+                                                    {results.moneyness.toFixed(4)}
+                                                </p>
+                                                <p className="text-xs mt-1" style={{ color: results.moneynessInfo.color }}>
+                                                    {results.moneynessInfo.status}
+                                                </p>
+                                            </div>
+
+                                            {/* Implied Volatility (solo en modo B) */}
+                                            {results.impliedVol !== undefined && (
+                                                <div className="bg-[#1E293B] rounded-lg border border-[#3B82F6] p-4">
+                                                    <p className="text-sm text-[#94A3B8] mb-1">Implied Volatility</p>
+                                                    <p className="text-2xl font-mono font-bold text-[#3B82F6]">
+                                                        {results.impliedVol.toFixed(2)}%
+                                                    </p>
+                                                    <p className="text-xs text-[#64748B] mt-1">
+                                                        Calculada vía Newton-Raphson
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Payoff Diagram */}
+                                        <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-6">
+                                            <h3 className="text-lg font-semibold mb-4 text-[#E2E8F0]">
+                                                Payoff Diagram at Expiration
+                                            </h3>
+                                            <ResponsiveContainer width="100%" height={300}>
+                                                <LineChart data={payoffData}>
+                                                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                                    <XAxis
+                                                        dataKey="price"
+                                                        stroke="#94A3B8"
+                                                        tick={{ fill: '#94A3B8', fontSize: 12 }}
+                                                        label={{ value: 'Precio Subyacente', position: 'insideBottom', offset: -5, fill: '#94A3B8' }}
+                                                    />
+                                                    <YAxis
+                                                        stroke="#94A3B8"
+                                                        tick={{ fill: '#94A3B8', fontSize: 12 }}
+                                                        label={{ value: 'P&L (€)', angle: -90, position: 'insideLeft', fill: '#94A3B8' }}
+                                                    />
+                                                    <Tooltip content={<CustomTooltip />} />
+                                                    <ReferenceLine y={0} stroke="#94A3B8" strokeDasharray="3 3" />
+                                                    <ReferenceLine
+                                                        x={parseFloat(strike)}
+                                                        stroke="#64748B"
+                                                        strokeDasharray="5 5"
+                                                        label={{ value: 'Strike', fill: '#64748B', position: 'top', fontSize: 11 }}
+                                                    />
+                                                    <ReferenceLine
+                                                        x={results.breakeven}
+                                                        stroke="#F59E0B"
+                                                        strokeDasharray="5 5"
+                                                        label={{ value: 'BE', fill: '#F59E0B', position: 'top', fontSize: 11 }}
+                                                    />
+                                                    <Line
+                                                        type="monotone"
+                                                        dataKey="payoff"
+                                                        name="Payoff"
+                                                        stroke={warrantType === 'call' ? '#10B981' : '#EF4444'}
+                                                        strokeWidth={2}
+                                                        dot={false}
+                                                    />
+                                                </LineChart>
+                                            </ResponsiveContainer>
+                                        </div>
+
+                                        {/* P&L Evolution Chart */}
+                                        {calculationMode === 'volatility' && plEvolutionData.data.length > 0 && (
+                                            <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-6">
+                                                <h3 className="text-lg font-semibold mb-2 text-[#E2E8F0]">
+                                                    P&L Evolution (Theta Decay)
+                                                </h3>
+                                                <p className="text-xs text-[#64748B] mb-4">
+                                                    Valor del warrant a diferentes precios del subyacente y tiempos hasta vencimiento
+                                                </p>
+                                                <ResponsiveContainer width="100%" height={300}>
+                                                    <LineChart data={plEvolutionData.data}>
+                                                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                                        <XAxis
+                                                            dataKey="price"
+                                                            stroke="#94A3B8"
+                                                            tick={{ fill: '#94A3B8', fontSize: 12 }}
+                                                            label={{ value: 'Precio Subyacente', position: 'insideBottom', offset: -5, fill: '#94A3B8' }}
+                                                        />
+                                                        <YAxis
+                                                            stroke="#94A3B8"
+                                                            tick={{ fill: '#94A3B8', fontSize: 12 }}
+                                                            label={{ value: 'Valor Warrant (€)', angle: -90, position: 'insideLeft', fill: '#94A3B8' }}
+                                                        />
+                                                        <Tooltip content={<CustomTooltip />} />
+                                                        <Legend 
+                                                            wrapperStyle={{ color: '#94A3B8' }}
+                                                            formatter={(value) => <span style={{ color: '#94A3B8' }}>{value}</span>}
+                                                        />
+                                                        {plEvolutionData.timePoints.map((tp, idx) => (
+                                                            <Line
+                                                                key={tp.label}
+                                                                type="monotone"
+                                                                dataKey={tp.label}
+                                                                name={tp.label}
+                                                                stroke={['#3B82F6', '#10B981', '#F59E0B', '#EF4444'][idx % 4]}
+                                                                strokeWidth={idx === 0 || idx === plEvolutionData.timePoints.length - 1 ? 2.5 : 1.5}
+                                                                dot={false}
+                                                                strokeDasharray={idx === plEvolutionData.timePoints.length - 1 ? '5 5' : '0'}
+                                                            />
+                                                        ))}
+                                                    </LineChart>
+                                                </ResponsiveContainer>
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
+                                    <div className="bg-[#1E293B] rounded-lg border border-[#EF4444] p-8 text-center">
+                                        <p className="text-[#EF4444] text-lg font-semibold">
+                                            {errors.length > 0
+                                                ? 'Por favor corrija los errores en los inputs'
+                                                : 'No se pudo calcular IV - precio fuera de rango'}
+                                        </p>
+                                        {errors.length === 0 && calculationMode === 'impliedVol' && (
+                                            <p className="text-[#94A3B8] text-sm mt-2">
+                                                La volatilidad implícita no convergió en 50 iteraciones. 
+                                                Verifique que el precio de mercado sea coherente con los demás parámetros.
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
                         </div>
+                    </div>
 
-                        {/* P&L Evolution Chart */}
-                        {calculationMode === 'volatility' && plEvolutionData.data.length > 0 && (
-                          <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-6">
-                            <h3 className="text-lg font-semibold mb-4 text-[#E2E8F0]">
-                              P&L Evolution (Theta Decay)
-                            </h3>
-                            <ResponsiveContainer width="100%" height={300}>
-                              <LineChart data={plEvolutionData.data}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                <XAxis
-                                  dataKey="price"
-                                  stroke="#94A3B8"
-                                  tick={{ fill: '#94A3B8' }}
-                                  label={{ value: 'Precio Subyacente', position: 'insideBottom', offset: -5, fill: '#94A3B8' }}
-                                />
-                                <YAxis
-                                  stroke="#94A3B8"
-                                  tick={{ fill: '#94A3B8' }}
-                                  label={{ value: 'Valor Warrant (€)', angle: -90, position: 'insideLeft', fill: '#94A3B8' }}
-                                />
-                                <Tooltip
-                                  contentStyle={{
-                                    backgroundColor: '#1E293B',
-                                    border: '1px solid #334155',
-                                    borderRadius: '4px',
-                                    color: '#E2E8F0',
-                                  }}
-                                />
-                                <Legend wrapperStyle={{ color: '#94A3B8' }} />
-                                {plEvolutionData.timePoints.map((tp, idx) => (
-                                  <Line
-                                    key={tp.label}
-                                    type="monotone"
-                                    dataKey={tp.label}
-                                    stroke={['#3B82F6', '#10B981', '#F59E0B', '#EF4444'][idx % 4]}
-                                    strokeWidth={tp.days === 0 ? 3 : 2}
-                                    dot={false}
-                                  />
-                                ))}
-                              </LineChart>
-                            </ResponsiveContainer>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div className="bg-[#1E293B] rounded-lg border border-[#EF4444] p-8 text-center">
-                        <p className="text-[#EF4444] text-lg font-semibold">
-                          {errors.length > 0
-                            ? 'Por favor corrija los errores en los inputs'
-                            : 'No se pudo calcular IV - precio fuera de rango'}
-                        </p>
-                        {errors.length === 0 && calculationMode === 'impliedVol' && (
-                          <p className="text-[#94A3B8] text-sm mt-2">
-                            La volatilidad implícita no convergió en 50 iteraciones. Verifique el market price.
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                    {/* Footer */}
+                    <footer className="bg-[#151B3D] border-t border-[#334155] px-6 py-4 mt-12">
+                        <div className="max-w-7xl mx-auto">
+                            <p className="text-xs text-[#94A3B8] text-center">
+                                European Warrant Calculator v1.1 | Black-Scholes Model | Solo para fines educativos
+                            </p>
+                            <p className="text-xs text-[#64748B] text-center mt-1">
+                                Los warrants son productos apalancados de alto riesgo. Esto no constituye asesoramiento financiero.
+                            </p>
+                        </div>
+                    </footer>
                 </div>
-              </div>
-
-              {/* Footer */}
-              <footer className="bg-[#151B3D] border-t border-[#334155] px-6 py-4 mt-12">
-                <p className="text-xs text-[#94A3B8] text-center">
-                  European Warrant Calculator | Black-Scholes Model | Solo para fines educativos
-                </p>
-              </footer>
-            </div>
-          );
+            );
         };
 
         // Render
