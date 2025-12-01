@@ -1,0 +1,20 @@
+{
+  "name": "warrant-calculator",
+  "version": "1.1.0",
+  "description": "European Warrant Calculator - Calculadora profesional de warrants financieros europeos sobre índices con implementación Black-Scholes",
+  "author": "matemadrigal",
+  "license": "MIT",
+  "private": true,
+  "keywords": [
+    "warrant",
+    "calculator",
+    "black-scholes",
+    "options",
+    "finance",
+    "derivatives"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/matemadrigal/Calculadora_Warrants.git"
+  }
+}
