@@ -13,7 +13,7 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
     <!-- Recharts -->
-    <script src="https://unpkg.com/recharts@2.5.0/dist/Recharts.js"></script>
+    <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
 
     <!-- Babel Standalone for JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -31,6 +31,16 @@
 
         code, .font-mono {
             font-family: 'Monaco', 'Courier New', monospace;
+        }
+
+        /* Hide number input spinners */
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type="number"] {
+            -moz-appearance: textfield;
         }
 
         /* Custom scrollbar for dark theme */
@@ -76,7 +86,6 @@
         /**
          * Aproximación de la función de distribución acumulada normal estándar
          * Método: Abramowitz-Stegun (precisión ~7.5×10^-8)
-         * Referencia: Handbook of Mathematical Functions, 1964
          */
         function normalCDF(x) {
             if (x < -10) return 0;
@@ -98,7 +107,6 @@
 
         /**
          * Cálculo de d1 para fórmula Black-Scholes
-         * d1 = [ln(S/K) + (r - q + σ²/2)·T] / (σ·√T)
          */
         function calculateD1(spot, strike, T, r, q, sigma) {
             const numerator = Math.log(spot / strike) + (r - q + (sigma * sigma) / 2) * T;
@@ -108,7 +116,6 @@
 
         /**
          * Cálculo de d2 para fórmula Black-Scholes
-         * d2 = d1 - σ·√T
          */
         function calculateD2(d1, sigma, T) {
             return d1 - sigma * Math.sqrt(T);
@@ -116,10 +123,6 @@
 
         /**
          * Modelo Black-Scholes para opciones/warrants europeos
-         * Call: S·e^(-q·T)·N(d1) - K·e^(-r·T)·N(d2)
-         * Put:  K·e^(-r·T)·N(-d2) - S·e^(-q·T)·N(-d1)
-         * 
-         * @returns Precio teórico de la opción (sin ajuste de ratio)
          */
         function blackScholes(params) {
             const { type, spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility } = params;
@@ -131,7 +134,6 @@
             const q = dividendYield / 100;
             const sigma = volatility / 100;
 
-            // Al vencimiento: valor intrínseco
             if (T <= 0) {
                 return type === 'call' 
                     ? Math.max(0, spot - strike) 
@@ -149,9 +151,7 @@
         }
 
         /**
-         * Cálculo de Delta (sensibilidad al precio del subyacente)
-         * Call Delta: e^(-q·T) · N(d1)
-         * Put Delta:  e^(-q·T) · [N(d1) - 1]
+         * Cálculo de Delta
          */
         function calculateDelta(params) {
             const { type, spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility } = params;
@@ -159,17 +159,15 @@
             if (!volatility || volatility <= 0) return 0;
 
             const T = daysToExpiration / 365.25;
-            const r = riskFreeRate / 100;
             const q = dividendYield / 100;
             const sigma = volatility / 100;
 
-            // Al vencimiento: delta binario
             if (T <= 0) {
                 if (type === 'call') return spot > strike ? 1 : 0;
                 return spot < strike ? -1 : 0;
             }
 
-            const d1 = calculateD1(spot, strike, T, r, q, sigma);
+            const d1 = calculateD1(spot, strike, T, riskFreeRate / 100, q, sigma);
             const Nd1 = normalCDF(d1);
 
             return type === 'call' 
@@ -178,9 +176,7 @@
         }
 
         /**
-         * Cálculo de Vega (sensibilidad a la volatilidad)
-         * Vega = S · e^(-q·T) · √T · φ(d1)
-         * donde φ(x) = PDF normal estándar
+         * Cálculo de Vega
          */
         function calculateVega(params) {
             const { spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility } = params;
@@ -188,32 +184,28 @@
             if (!volatility || volatility <= 0) return 0;
 
             const T = daysToExpiration / 365.25;
-            const r = riskFreeRate / 100;
             const q = dividendYield / 100;
             const sigma = volatility / 100;
 
             if (T <= 0) return 0;
 
-            const d1 = calculateD1(spot, strike, T, r, q, sigma);
+            const d1 = calculateD1(spot, strike, T, riskFreeRate / 100, q, sigma);
             const pdf = (1 / Math.sqrt(2 * Math.PI)) * Math.exp(-d1 * d1 / 2);
             const vega = spot * Math.exp(-q * T) * Math.sqrt(T) * pdf;
 
-            return vega / 100; // Por 1% de cambio en volatilidad
+            return vega / 100;
         }
 
         /**
          * Cálculo de Volatilidad Implícita mediante Newton-Raphson
-         * Iteración: σ_new = σ_old - (BS_price - market_price) / vega
-         * 
-         * @returns Volatilidad implícita en % o null si no converge
          */
         function calculateImpliedVol(params) {
             const { marketPrice } = params;
             if (!marketPrice || marketPrice <= 0) return null;
 
-            let sigma = 20; // Initial guess: 20%
-            const maxIterations = 50;
-            const tolerance = 0.0001;
+            let sigma = 30;
+            const maxIterations = 100;
+            const tolerance = 0.00001;
 
             for (let i = 0; i < maxIterations; i++) {
                 const paramsWithVol = { ...params, volatility: sigma };
@@ -226,43 +218,32 @@
 
                 const vega = calculateVega(paramsWithVol);
 
-                if (vega === 0 || !isFinite(vega)) {
-                    // Intentar ajustar sigma manualmente si vega es 0
+                if (Math.abs(vega) < 1e-10) {
                     sigma = diff > 0 ? sigma * 0.9 : sigma * 1.1;
                     continue;
                 }
 
                 sigma = sigma - (diff / vega);
 
-                // Limitar sigma a rangos razonables
-                if (sigma < 0.1) sigma = 0.1;
+                if (sigma < 0.5) sigma = 0.5;
                 if (sigma > 500) sigma = 500;
             }
 
-            return null; // No convergió
+            return null;
         }
 
         /**
          * Calcula el breakeven price al vencimiento
-         * CORREGIDO: Para warrants, el premium se escala por el ratio
-         * 
-         * Call Breakeven: Strike + (Premium / Ratio)
-         * Put Breakeven:  Strike - (Premium / Ratio)
          */
         function calculateBreakeven(type, strike, premium, conversionRatio) {
-            // Premium ya está en términos del warrant (precio × ratio)
-            // Para el breakeven necesitamos el valor por unidad de índice
             const premiumPerUnit = premium / conversionRatio;
-            
-            if (type === 'call') {
-                return strike + premiumPerUnit;
-            } else {
-                return strike - premiumPerUnit;
-            }
+            return type === 'call' 
+                ? strike + premiumPerUnit 
+                : strike - premiumPerUnit;
         }
 
         /**
-         * Determina el estado de moneyness del warrant
+         * Determina el estado de moneyness
          */
         function getMoneyness(type, spot, strike) {
             const ratio = spot / strike;
@@ -277,6 +258,61 @@
             }
         }
 
+        // ==================== VALIDACIÓN PURA (SIN SIDE EFFECTS) ====================
+
+        /**
+         * Función de validación PURA - no modifica estado
+         * @returns Array de errores
+         */
+        function validateInputs(spot, strike, daysToExpiration, riskFreeRate, dividendYield, conversionRatio, calculationMode, volatility, marketPrice) {
+            const errors = [];
+
+            const spotNum = parseFloat(spot);
+            const strikeNum = parseFloat(strike);
+            const daysNum = parseInt(daysToExpiration);
+            const riskFreeNum = parseFloat(riskFreeRate);
+            const divYieldNum = parseFloat(dividendYield);
+            const ratioNum = parseFloat(conversionRatio);
+
+            if (isNaN(spotNum) || spotNum <= 0) {
+                errors.push({ field: 'spot', message: 'Debe ser positivo' });
+            }
+
+            if (isNaN(strikeNum) || strikeNum <= 0) {
+                errors.push({ field: 'strike', message: 'Debe ser positivo' });
+            }
+
+            if (isNaN(daysNum) || daysNum < 1 || daysNum > 3650) {
+                errors.push({ field: 'days', message: 'Rango 1-3650 días' });
+            }
+
+            if (isNaN(riskFreeNum) || riskFreeNum < 0 || riskFreeNum > 50) {
+                errors.push({ field: 'riskFree', message: 'Rango 0-50%' });
+            }
+
+            if (isNaN(divYieldNum) || divYieldNum < 0 || divYieldNum > 20) {
+                errors.push({ field: 'dividend', message: 'Rango 0-20%' });
+            }
+
+            if (isNaN(ratioNum) || ratioNum <= 0 || ratioNum > 1000) {
+                errors.push({ field: 'ratio', message: 'Debe ser positivo' });
+            }
+
+            if (calculationMode === 'volatility') {
+                const volNum = parseFloat(volatility);
+                if (isNaN(volNum) || volNum < 1 || volNum > 200) {
+                    errors.push({ field: 'volatility', message: 'Rango 1-200%' });
+                }
+            } else {
+                const priceNum = parseFloat(marketPrice);
+                if (isNaN(priceNum) || priceNum <= 0) {
+                    errors.push({ field: 'marketPrice', message: 'Debe ser positivo' });
+                }
+            }
+
+            return errors;
+        }
+
         // ==================== COMPONENTE PRINCIPAL ====================
 
         const WarrantCalculator = () => {
@@ -287,66 +323,23 @@
             const [daysToExpiration, setDaysToExpiration] = useState('30');
             const [riskFreeRate, setRiskFreeRate] = useState('4.5');
             const [dividendYield, setDividendYield] = useState('1.5');
-            const [conversionRatio, setConversionRatio] = useState('0.001'); // Típico BNP Paribas
+            const [conversionRatio, setConversionRatio] = useState('0.001');
             const [calculationMode, setCalculationMode] = useState('volatility');
             const [volatility, setVolatility] = useState('20');
             const [marketPrice, setMarketPrice] = useState('');
-            const [errors, setErrors] = useState([]);
 
-            // Validaciones
-            const validate = () => {
-                const newErrors = [];
-
-                const spotNum = parseFloat(spot);
-                const strikeNum = parseFloat(strike);
-                const daysNum = parseInt(daysToExpiration);
-                const riskFreeNum = parseFloat(riskFreeRate);
-                const divYieldNum = parseFloat(dividendYield);
-                const ratioNum = parseFloat(conversionRatio);
-
-                if (isNaN(spotNum) || spotNum <= 0) {
-                    newErrors.push({ field: 'spot', message: 'Debe ser positivo' });
-                }
-
-                if (isNaN(strikeNum) || strikeNum <= 0) {
-                    newErrors.push({ field: 'strike', message: 'Debe ser positivo' });
-                }
-
-                if (isNaN(daysNum) || daysNum < 1 || daysNum > 3650) {
-                    newErrors.push({ field: 'days', message: 'Rango 1-3650 días' });
-                }
-
-                if (isNaN(riskFreeNum) || riskFreeNum < 0 || riskFreeNum > 50) {
-                    newErrors.push({ field: 'riskFree', message: 'Rango 0-50%' });
-                }
-
-                if (isNaN(divYieldNum) || divYieldNum < 0 || divYieldNum > 20) {
-                    newErrors.push({ field: 'dividend', message: 'Rango 0-20%' });
-                }
-
-                if (isNaN(ratioNum) || ratioNum <= 0 || ratioNum > 1000) {
-                    newErrors.push({ field: 'ratio', message: 'Debe ser positivo (ej: 0.001, 0.01, 1)' });
-                }
-
-                if (calculationMode === 'volatility') {
-                    const volNum = parseFloat(volatility);
-                    if (isNaN(volNum) || volNum < 1 || volNum > 200) {
-                        newErrors.push({ field: 'volatility', message: 'Rango 1-200%' });
-                    }
-                } else {
-                    const priceNum = parseFloat(marketPrice);
-                    if (isNaN(priceNum) || priceNum <= 0) {
-                        newErrors.push({ field: 'marketPrice', message: 'Debe ser positivo' });
-                    }
-                }
-
-                setErrors(newErrors);
-                return newErrors.length === 0;
-            };
+            // CORRECCIÓN: Validación como useMemo puro (sin side effects)
+            const errors = useMemo(() => {
+                return validateInputs(
+                    spot, strike, daysToExpiration, riskFreeRate, 
+                    dividendYield, conversionRatio, calculationMode, 
+                    volatility, marketPrice
+                );
+            }, [spot, strike, daysToExpiration, riskFreeRate, dividendYield, conversionRatio, calculationMode, volatility, marketPrice]);
 
             // Cálculo de resultados
             const results = useMemo(() => {
-                if (!validate()) return null;
+                if (errors.length > 0) return null;
 
                 const ratio = parseFloat(conversionRatio);
                 const spotNum = parseFloat(spot);
@@ -368,37 +361,27 @@
                 if (calculationMode === 'volatility') {
                     usedVolatility = parseFloat(volatility);
                     inputs.volatility = usedVolatility;
-                    // Precio teórico BS × ratio = precio del warrant
                     premium = blackScholes(inputs) * ratio;
                 } else {
-                    // Market price del warrant / ratio = precio BS para calcular IV
                     const marketPriceNum = parseFloat(marketPrice);
                     const bsEquivalentPrice = marketPriceNum / ratio;
                     inputs.marketPrice = bsEquivalentPrice;
                     
                     const iv = calculateImpliedVol(inputs);
-                    if (iv === null) {
-                        return null;
-                    }
+                    if (iv === null) return null;
+                    
                     impliedVol = iv;
                     usedVolatility = iv;
                     inputs.volatility = iv;
                     premium = marketPriceNum;
                 }
 
-                // Delta del warrant = Delta BS × ratio
                 const deltaBS = calculateDelta(inputs);
                 const deltaWarrant = deltaBS * ratio;
-
-                // Breakeven CORREGIDO
                 const breakeven = calculateBreakeven(warrantType, strikeNum, premium, ratio);
-
-                // Moneyness
                 const moneyness = spotNum / strikeNum;
                 const moneynessInfo = getMoneyness(warrantType, spotNum, strikeNum);
 
-                // P&L al vencimiento SI el spot no cambia
-                // Valor intrínseco - premium pagado
                 let intrinsicValue = 0;
                 if (warrantType === 'call') {
                     intrinsicValue = Math.max(0, spotNum - strikeNum) * ratio;
@@ -418,10 +401,10 @@
                     impliedVol,
                     usedVolatility,
                     intrinsicValue,
-                    timeValue: premium - intrinsicValue,
+                    timeValue: Math.max(0, premium - intrinsicValue),
                 };
             }, [
-                warrantType, spot, strike, daysToExpiration, riskFreeRate,
+                errors, warrantType, spot, strike, daysToExpiration, riskFreeRate,
                 dividendYield, conversionRatio, calculationMode, volatility, marketPrice,
             ]);
 
@@ -438,23 +421,20 @@
 
                 const data = [];
                 for (let price = minPrice; price <= maxPrice; price += step) {
-                    let intrinsic = 0;
-                    if (warrantType === 'call') {
-                        intrinsic = Math.max(0, price - strikeNum) * ratio;
-                    } else {
-                        intrinsic = Math.max(0, strikeNum - price) * ratio;
-                    }
-                    const payoff = intrinsic - premium;
+                    let intrinsic = warrantType === 'call'
+                        ? Math.max(0, price - strikeNum) * ratio
+                        : Math.max(0, strikeNum - price) * ratio;
+                    
                     data.push({
                         price: parseFloat(price.toFixed(2)),
-                        payoff: parseFloat(payoff.toFixed(4)),
+                        payoff: parseFloat((intrinsic - premium).toFixed(4)),
                     });
                 }
 
                 return data;
             }, [results, strike, warrantType, conversionRatio]);
 
-            // Datos para gráfico de P&L Evolution (Theta Decay)
+            // Datos para gráfico de Theta Decay
             const plEvolutionData = useMemo(() => {
                 if (!results || calculationMode === 'impliedVol') {
                     return { data: [], timePoints: [] };
@@ -469,17 +449,12 @@
                 const maxPrice = strikeNum * 1.3;
                 const step = (maxPrice - minPrice) / 50;
 
-                // Puntos temporales para mostrar theta decay
-                const allTimePoints = [
+                const timePoints = [
                     { days: daysNum, label: 'Hoy' },
                     { days: Math.max(Math.floor(daysNum * 0.66), 1), label: `T-${Math.floor(daysNum * 0.34)}d` },
                     { days: Math.max(Math.floor(daysNum * 0.33), 1), label: `T-${Math.floor(daysNum * 0.66)}d` },
-                    { days: 0, label: 'Vencimiento' },
-                ];
-                
-                const timePoints = allTimePoints.filter((tp, idx) => 
-                    idx === 0 || idx === allTimePoints.length - 1 || tp.days < daysNum
-                );
+                    { days: 1, label: 'Vencimiento' },
+                ].filter((tp, idx, arr) => idx === 0 || idx === arr.length - 1 || tp.days < daysNum);
 
                 const data = [];
                 for (let price = minPrice; price <= maxPrice; price += step) {
@@ -496,8 +471,7 @@
                             volatility: volNum,
                         };
 
-                        const value = blackScholes(inputs) * ratio;
-                        point[tp.label] = parseFloat(value.toFixed(4));
+                        point[tp.label] = parseFloat((blackScholes(inputs) * ratio).toFixed(4));
                     });
 
                     data.push(point);
@@ -506,18 +480,14 @@
                 return { data, timePoints };
             }, [results, strike, daysToExpiration, riskFreeRate, dividendYield, warrantType, conversionRatio, calculationMode]);
 
-            const getError = (field) => {
-                return errors.find(e => e.field === field)?.message;
-            };
+            const getError = (field) => errors.find(e => e.field === field)?.message;
 
-            // Tooltip personalizado para gráficos
+            // Custom Tooltip
             const CustomTooltip = ({ active, payload, label }) => {
                 if (active && payload && payload.length) {
                     return (
                         <div className="bg-[#1E293B] border border-[#334155] rounded p-3">
-                            <p className="text-[#E2E8F0] font-mono text-sm mb-1">
-                                Spot: {label}
-                            </p>
+                            <p className="text-[#E2E8F0] font-mono text-sm mb-1">Spot: {label}</p>
                             {payload.map((entry, idx) => (
                                 <p key={idx} style={{ color: entry.color }} className="font-mono text-sm">
                                     {entry.name}: {entry.value?.toFixed(4)} €
@@ -542,9 +512,7 @@
                                     Calculadora de warrants sobre índices – Black-Scholes Model
                                 </p>
                             </div>
-                            <div className="text-right">
-                                <span className="text-xs text-[#94A3B8]">v1.1</span>
-                            </div>
+                            <span className="text-xs text-[#94A3B8]">v1.2</span>
                         </div>
                     </header>
 
@@ -588,7 +556,7 @@
                                         </div>
                                     </div>
 
-                                    {/* Numeric Inputs */}
+                                    {/* Inputs */}
                                     <div className="space-y-4">
                                         <div>
                                             <label className="block text-sm font-medium text-[#94A3B8] mb-1">
@@ -601,9 +569,7 @@
                                                 className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
                                                 step="1"
                                             />
-                                            {getError('spot') && (
-                                                <p className="text-[#EF4444] text-xs mt-1">{getError('spot')}</p>
-                                            )}
+                                            {getError('spot') && <p className="text-[#EF4444] text-xs mt-1">{getError('spot')}</p>}
                                         </div>
 
                                         <div>
@@ -617,9 +583,7 @@
                                                 className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
                                                 step="1"
                                             />
-                                            {getError('strike') && (
-                                                <p className="text-[#EF4444] text-xs mt-1">{getError('strike')}</p>
-                                            )}
+                                            {getError('strike') && <p className="text-[#EF4444] text-xs mt-1">{getError('strike')}</p>}
                                         </div>
 
                                         <div>
@@ -634,9 +598,7 @@
                                                 step="1"
                                                 min="1"
                                             />
-                                            {getError('days') && (
-                                                <p className="text-[#EF4444] text-xs mt-1">{getError('days')}</p>
-                                            )}
+                                            {getError('days') && <p className="text-[#EF4444] text-xs mt-1">{getError('days')}</p>}
                                         </div>
 
                                         <div className="grid grid-cols-2 gap-4">
@@ -651,9 +613,7 @@
                                                     className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
                                                     step="0.1"
                                                 />
-                                                {getError('riskFree') && (
-                                                    <p className="text-[#EF4444] text-xs mt-1">{getError('riskFree')}</p>
-                                                )}
+                                                {getError('riskFree') && <p className="text-[#EF4444] text-xs mt-1">{getError('riskFree')}</p>}
                                             </div>
 
                                             <div>
@@ -667,19 +627,15 @@
                                                     className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
                                                     step="0.1"
                                                 />
-                                                {getError('dividend') && (
-                                                    <p className="text-[#EF4444] text-xs mt-1">{getError('dividend')}</p>
-                                                )}
+                                                {getError('dividend') && <p className="text-[#EF4444] text-xs mt-1">{getError('dividend')}</p>}
                                             </div>
                                         </div>
 
-                                        {/* Conversion Ratio - CRÍTICO PARA WARRANTS BNP */}
+                                        {/* Conversion Ratio */}
                                         <div className="bg-[#0A0E27] p-3 rounded border border-[#3B82F6]">
                                             <label className="block text-sm font-medium text-[#3B82F6] mb-1">
                                                 Ratio de Conversión
-                                                <span className="text-xs text-[#64748B] ml-2 font-normal">
-                                                    (Ver en ficha del warrant)
-                                                </span>
+                                                <span className="text-xs text-[#64748B] ml-2 font-normal">(Ver ficha warrant)</span>
                                             </label>
                                             <input
                                                 type="number"
@@ -689,12 +645,8 @@
                                                 step="0.001"
                                                 min="0.0001"
                                             />
-                                            <p className="text-xs text-[#64748B] mt-1">
-                                                BNP típico: 0.001 (1/1000) o 0.01 (1/100)
-                                            </p>
-                                            {getError('ratio') && (
-                                                <p className="text-[#EF4444] text-xs mt-1">{getError('ratio')}</p>
-                                            )}
+                                            <p className="text-xs text-[#64748B] mt-1">BNP típico: 0.001 (1/1000) o 0.01 (1/100)</p>
+                                            {getError('ratio') && <p className="text-[#EF4444] text-xs mt-1">{getError('ratio')}</p>}
                                         </div>
                                     </div>
 
@@ -713,7 +665,7 @@
                                         </select>
                                     </div>
 
-                                    {/* Conditional Input based on Mode */}
+                                    {/* Conditional Input */}
                                     <div className="mt-4">
                                         {calculationMode === 'volatility' ? (
                                             <div>
@@ -727,13 +679,9 @@
                                                     className="w-full bg-[#0A0E27] border border-[#334155] rounded px-3 py-2 text-[#E2E8F0] font-mono text-base focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
                                                     step="0.5"
                                                 />
-                                                {getError('volatility') && (
-                                                    <p className="text-[#EF4444] text-xs mt-1">{getError('volatility')}</p>
-                                                )}
+                                                {getError('volatility') && <p className="text-[#EF4444] text-xs mt-1">{getError('volatility')}</p>}
                                                 {parseFloat(volatility) > 100 && !getError('volatility') && (
-                                                    <p className="text-[#F59E0B] text-xs mt-1 flex items-center">
-                                                        ⚠️ Volatilidad superior al 100% - verificar datos
-                                                    </p>
+                                                    <p className="text-[#F59E0B] text-xs mt-1">⚠️ Volatilidad superior al 100%</p>
                                                 )}
                                             </div>
                                         ) : (
@@ -749,9 +697,7 @@
                                                     step="0.0001"
                                                     placeholder="Ej: 0.023"
                                                 />
-                                                {getError('marketPrice') && (
-                                                    <p className="text-[#EF4444] text-xs mt-1">{getError('marketPrice')}</p>
-                                                )}
+                                                {getError('marketPrice') && <p className="text-[#EF4444] text-xs mt-1">{getError('marketPrice')}</p>}
                                             </div>
                                         )}
                                     </div>
@@ -760,22 +706,20 @@
 
                             {/* Results Panel */}
                             <div className="lg:col-span-3 space-y-6">
-                                {/* Metrics Cards */}
                                 {results ? (
                                     <>
+                                        {/* Metrics Cards */}
                                         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                                            {/* Premium */}
                                             <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
                                                 <p className="text-sm text-[#94A3B8] mb-1">Premium</p>
                                                 <p className="text-2xl font-mono font-bold text-[#3B82F6]">
                                                     {results.premium.toFixed(4)} €
                                                 </p>
                                                 <p className="text-xs text-[#64748B] mt-1">
-                                                    Valor temporal: {results.timeValue >= 0 ? results.timeValue.toFixed(4) : '0.0000'} €
+                                                    Valor temporal: {results.timeValue.toFixed(4)} €
                                                 </p>
                                             </div>
 
-                                            {/* Delta */}
                                             <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
                                                 <p className="text-sm text-[#94A3B8] mb-1">Delta (BS)</p>
                                                 <p className={`text-2xl font-mono font-bold ${results.delta >= 0 ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
@@ -786,7 +730,6 @@
                                                 </p>
                                             </div>
 
-                                            {/* P&L at Expiration */}
                                             <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
                                                 <p className="text-sm text-[#94A3B8] mb-1">P&L si Spot = {spot}</p>
                                                 <p className={`text-2xl font-mono font-bold ${results.profitLoss >= 0 ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
@@ -797,18 +740,14 @@
                                                 </p>
                                             </div>
 
-                                            {/* Breakeven */}
                                             <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
                                                 <p className="text-sm text-[#94A3B8] mb-1">Breakeven</p>
                                                 <p className="text-2xl font-mono font-bold text-[#E2E8F0]">
                                                     {results.breakeven.toFixed(2)}
                                                 </p>
-                                                <p className="text-xs text-[#64748B] mt-1">
-                                                    Precio necesario para P&L = 0
-                                                </p>
+                                                <p className="text-xs text-[#64748B] mt-1">Precio para P&L = 0</p>
                                             </div>
 
-                                            {/* Moneyness */}
                                             <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-4">
                                                 <p className="text-sm text-[#94A3B8] mb-1">Moneyness (S/K)</p>
                                                 <p className="text-2xl font-mono font-bold text-[#E2E8F0]">
@@ -819,16 +758,13 @@
                                                 </p>
                                             </div>
 
-                                            {/* Implied Volatility (solo en modo B) */}
                                             {results.impliedVol !== undefined && (
                                                 <div className="bg-[#1E293B] rounded-lg border border-[#3B82F6] p-4">
                                                     <p className="text-sm text-[#94A3B8] mb-1">Implied Volatility</p>
                                                     <p className="text-2xl font-mono font-bold text-[#3B82F6]">
                                                         {results.impliedVol.toFixed(2)}%
                                                     </p>
-                                                    <p className="text-xs text-[#64748B] mt-1">
-                                                        Calculada vía Newton-Raphson
-                                                    </p>
+                                                    <p className="text-xs text-[#64748B] mt-1">Newton-Raphson</p>
                                                 </div>
                                             )}
                                         </div>
@@ -878,14 +814,14 @@
                                             </ResponsiveContainer>
                                         </div>
 
-                                        {/* P&L Evolution Chart */}
+                                        {/* Theta Decay Chart */}
                                         {calculationMode === 'volatility' && plEvolutionData.data.length > 0 && (
                                             <div className="bg-[#1E293B] rounded-lg border border-[#334155] p-6">
                                                 <h3 className="text-lg font-semibold mb-2 text-[#E2E8F0]">
                                                     P&L Evolution (Theta Decay)
                                                 </h3>
                                                 <p className="text-xs text-[#64748B] mb-4">
-                                                    Valor del warrant a diferentes precios del subyacente y tiempos hasta vencimiento
+                                                    Valor del warrant a diferentes precios y tiempos hasta vencimiento
                                                 </p>
                                                 <ResponsiveContainer width="100%" height={300}>
                                                     <LineChart data={plEvolutionData.data}>
@@ -932,8 +868,7 @@
                                         </p>
                                         {errors.length === 0 && calculationMode === 'impliedVol' && (
                                             <p className="text-[#94A3B8] text-sm mt-2">
-                                                La volatilidad implícita no convergió en 50 iteraciones. 
-                                                Verifique que el precio de mercado sea coherente con los demás parámetros.
+                                                La volatilidad implícita no convergió. Verifique el precio de mercado.
                                             </p>
                                         )}
                                     </div>
@@ -946,7 +881,7 @@
                     <footer className="bg-[#151B3D] border-t border-[#334155] px-6 py-4 mt-12">
                         <div className="max-w-7xl mx-auto">
                             <p className="text-xs text-[#94A3B8] text-center">
-                                European Warrant Calculator v1.1 | Black-Scholes Model | Solo para fines educativos
+                                European Warrant Calculator v1.2 | Black-Scholes Model | Solo para fines educativos
                             </p>
                             <p className="text-xs text-[#64748B] text-center mt-1">
                                 Los warrants son productos apalancados de alto riesgo. Esto no constituye asesoramiento financiero.
