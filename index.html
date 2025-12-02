@@ -12,7 +12,7 @@
     <meta property="og:description" content="Calculadora profesional de warrants con Black-Scholes">
     <meta property="og:type" content="website">
     
-    <title>European Warrant Calculator v3.1 - Volatility Skew</title>
+    <title>European Warrant Calculator v3.2 - Axis Fix</title>
 
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
@@ -141,10 +141,13 @@
 
     <script type="text/babel">
         // ============================================================================
-        // EUROPEAN WARRANT CALCULATOR v3.1 - Volatility Skew
+        // EUROPEAN WARRANT CALCULATOR v3.2 - Axis Fix
         // ============================================================================
         // Implementación profesional del modelo Black-Scholes-Merton para warrants
         // europeos con todas las Greeks y análisis completo de sensibilidad.
+        //
+        // v3.2: Corregido el rango del eje X en gráficos para incluir siempre
+        //       strike, spot y breakeven.
         //
         // Autor: Mateo Madrigal
         // Licencia: MIT
@@ -160,30 +163,11 @@
         // SECCIÓN 1: CONSTANTES Y CONFIGURACIÓN
         // ============================================================================
 
-        /**
-         * Número de días en un año para cálculos financieros.
-         * Se usa 365.25 para considerar años bisiestos (convención estándar).
-         */
         const DAYS_PER_YEAR = 365.25;
-
-        /**
-         * Tolerancia para convergencia en Newton-Raphson.
-         */
         const NEWTON_RAPHSON_TOLERANCE = 1e-8;
-
-        /**
-         * Máximo de iteraciones para Newton-Raphson.
-         */
         const NEWTON_RAPHSON_MAX_ITERATIONS = 100;
-
-        /**
-         * Límites de volatilidad implícita (en %).
-         */
         const IV_BOUNDS = { min: 0.1, max: 500 };
 
-        /**
-         * Colores del tema para consistencia.
-         */
         const COLORS = {
             primary: '#3B82F6',
             success: '#10B981',
@@ -196,10 +180,6 @@
             border: '#374151'
         };
 
-        /**
-         * Base de datos de activos subyacentes con parámetros de mercado.
-         * Datos actualizados a Diciembre 2024 (orientativos).
-         */
         const UNDERLYING_ASSETS = {
             EUROSTOXX50: {
                 name: 'Euro Stoxx 50',
@@ -334,9 +314,6 @@
             }
         };
 
-        /**
-         * Lista ordenada de activos para el selector.
-         */
         const ASSET_LIST = [
             { key: 'EUROSTOXX50', group: 'Europa' },
             { key: 'IBEX35', group: 'Europa' },
@@ -354,20 +331,10 @@
         // SECCIÓN 2: MATEMÁTICAS FINANCIERAS - BLACK-SCHOLES-MERTON
         // ============================================================================
 
-        /**
-         * Calcula la función de distribución acumulada de la normal estándar N(x).
-         * Usa la aproximación de Abramowitz & Stegun (1964), fórmula 26.2.17.
-         * Precisión: |error| < 7.5×10⁻⁸
-         * 
-         * @param {number} x - Valor de entrada
-         * @returns {number} - Probabilidad acumulada P(Z ≤ x)
-         */
         function normalCDF(x) {
-            // Casos extremos para evitar overflow
             if (x < -10) return 0;
             if (x > 10) return 1;
 
-            // Coeficientes de la aproximación polinomial
             const a1 = 0.319381530;
             const a2 = -0.356563782;
             const a3 = 1.781477937;
@@ -382,98 +349,45 @@
             const t4 = t3 * t;
             const t5 = t4 * t;
 
-            // PDF de la normal estándar
             const pdf = Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
-
-            // Aproximación polinomial
             const cdf = pdf * (a1 * t + a2 * t2 + a3 * t3 + a4 * t4 + a5 * t5);
 
             return x >= 0 ? 1 - cdf : cdf;
         }
 
-        /**
-         * Calcula la función de densidad de probabilidad de la normal estándar φ(x).
-         * 
-         * @param {number} x - Valor de entrada
-         * @returns {number} - Densidad de probabilidad en x
-         */
         function normalPDF(x) {
             return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
         }
 
-        /**
-         * Calcula d₁ de la fórmula Black-Scholes-Merton.
-         * 
-         * d₁ = [ln(S/K) + (r - q + σ²/2)T] / (σ√T)
-         * 
-         * @param {number} S - Precio spot del subyacente
-         * @param {number} K - Precio de ejercicio (strike)
-         * @param {number} T - Tiempo a vencimiento en años
-         * @param {number} r - Tasa libre de riesgo (decimal)
-         * @param {number} q - Dividend yield (decimal)
-         * @param {number} sigma - Volatilidad (decimal)
-         * @returns {number} - Valor de d₁
-         */
         function calculateD1(S, K, T, r, q, sigma) {
             const numerator = Math.log(S / K) + (r - q + 0.5 * sigma * sigma) * T;
             const denominator = sigma * Math.sqrt(T);
             return numerator / denominator;
         }
 
-        /**
-         * Calcula d₂ de la fórmula Black-Scholes-Merton.
-         * 
-         * d₂ = d₁ - σ√T
-         * 
-         * @param {number} d1 - Valor de d₁
-         * @param {number} sigma - Volatilidad (decimal)
-         * @param {number} T - Tiempo a vencimiento en años
-         * @returns {number} - Valor de d₂
-         */
         function calculateD2(d1, sigma, T) {
             return d1 - sigma * Math.sqrt(T);
         }
 
-        /**
-         * Calcula el precio teórico de una opción europea usando Black-Scholes-Merton.
-         * 
-         * Call: C = S·e^(-qT)·N(d₁) - K·e^(-rT)·N(d₂)
-         * Put:  P = K·e^(-rT)·N(-d₂) - S·e^(-qT)·N(-d₁)
-         * 
-         * @param {Object} params - Parámetros de la opción
-         * @param {string} params.type - 'call' o 'put'
-         * @param {number} params.spot - Precio spot (S)
-         * @param {number} params.strike - Strike price (K)
-         * @param {number} params.daysToExpiration - Días hasta vencimiento
-         * @param {number} params.riskFreeRate - Tasa libre de riesgo (%)
-         * @param {number} params.dividendYield - Dividend yield (%)
-         * @param {number} params.volatility - Volatilidad (%)
-         * @returns {number} - Precio teórico de la opción
-         */
         function blackScholesPrice(params) {
             const { type, spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility } = params;
 
-            // Validación de volatilidad
             if (!volatility || volatility <= 0) return 0;
 
-            // Convertir a formato decimal y años
             const T = daysToExpiration / DAYS_PER_YEAR;
             const r = riskFreeRate / 100;
             const q = dividendYield / 100;
             const sigma = volatility / 100;
 
-            // Caso especial: vencimiento (payoff intrínseco)
             if (T <= 0) {
                 return type === 'call' 
                     ? Math.max(0, spot - strike) 
                     : Math.max(0, strike - spot);
             }
 
-            // Cálculo de d₁ y d₂
             const d1 = calculateD1(spot, strike, T, r, q, sigma);
             const d2 = calculateD2(d1, sigma, T);
 
-            // Factores de descuento
             const discountDiv = Math.exp(-q * T);
             const discountRf = Math.exp(-r * T);
 
@@ -484,16 +398,9 @@
             }
         }
 
-        /**
-         * Calcula todas las Greeks de una opción europea.
-         * 
-         * @param {Object} params - Parámetros de la opción (mismo formato que blackScholesPrice)
-         * @returns {Object} - Objeto con todas las Greeks
-         */
         function calculateGreeks(params) {
             const { type, spot, strike, daysToExpiration, riskFreeRate, dividendYield, volatility } = params;
 
-            // Validación
             if (!volatility || volatility <= 0 || daysToExpiration <= 0) {
                 return {
                     delta: type === 'call' ? (spot > strike ? 1 : 0) : (spot < strike ? -1 : 0),
@@ -504,13 +411,11 @@
                 };
             }
 
-            // Convertir unidades
             const T = daysToExpiration / DAYS_PER_YEAR;
             const r = riskFreeRate / 100;
             const q = dividendYield / 100;
             const sigma = volatility / 100;
 
-            // Cálculos base
             const sqrtT = Math.sqrt(T);
             const d1 = calculateD1(spot, strike, T, r, q, sigma);
             const d2 = calculateD2(d1, sigma, T);
@@ -524,29 +429,14 @@
 
             let delta, gamma, theta, vega, rho;
 
-            // ═══════════════════════════════════════════════════════════════
-            // DELTA (Δ): Sensibilidad al precio del subyacente
-            // ═══════════════════════════════════════════════════════════════
-            // Call: Δ = e^(-qT) · N(d₁)
-            // Put:  Δ = e^(-qT) · [N(d₁) - 1] = -e^(-qT) · N(-d₁)
             if (type === 'call') {
                 delta = discountDiv * Nd1;
             } else {
                 delta = -discountDiv * Nmd1;
             }
 
-            // ═══════════════════════════════════════════════════════════════
-            // GAMMA (Γ): Segunda derivada respecto al spot (curvatura)
-            // ═══════════════════════════════════════════════════════════════
-            // Γ = e^(-qT) · φ(d₁) / (S · σ · √T)
-            // Gamma es igual para calls y puts
             gamma = (discountDiv * nd1) / (spot * sigma * sqrtT);
 
-            // ═══════════════════════════════════════════════════════════════
-            // THETA (Θ): Sensibilidad al paso del tiempo (time decay)
-            // ═══════════════════════════════════════════════════════════════
-            // Θ_call = -[S·e^(-qT)·φ(d₁)·σ/(2√T)] - r·K·e^(-rT)·N(d₂) + q·S·e^(-qT)·N(d₁)
-            // Θ_put  = -[S·e^(-qT)·φ(d₁)·σ/(2√T)] + r·K·e^(-rT)·N(-d₂) - q·S·e^(-qT)·N(-d₁)
             const thetaCommon = -(spot * discountDiv * nd1 * sigma) / (2 * sqrtT);
             
             if (type === 'call') {
@@ -554,23 +444,10 @@
             } else {
                 theta = thetaCommon + r * strike * discountRf * Nmd2 - q * spot * discountDiv * Nmd1;
             }
-            // Convertir a theta diario (dividir por 365.25)
             theta = theta / DAYS_PER_YEAR;
 
-            // ═══════════════════════════════════════════════════════════════
-            // VEGA (ν): Sensibilidad a la volatilidad
-            // ═══════════════════════════════════════════════════════════════
-            // ν = S · e^(-qT) · φ(d₁) · √T
-            // Vega es igual para calls y puts
-            // Nota: Devolvemos vega por 1% de cambio en volatilidad
             vega = (spot * discountDiv * nd1 * sqrtT) / 100;
 
-            // ═══════════════════════════════════════════════════════════════
-            // RHO (ρ): Sensibilidad a la tasa de interés
-            // ═══════════════════════════════════════════════════════════════
-            // ρ_call = K · T · e^(-rT) · N(d₂)
-            // ρ_put  = -K · T · e^(-rT) · N(-d₂)
-            // Nota: Devolvemos rho por 1% de cambio en tasa
             if (type === 'call') {
                 rho = (strike * T * discountRf * Nd2) / 100;
             } else {
@@ -580,25 +457,17 @@
             return { delta, gamma, theta, vega, rho };
         }
 
-        /**
-         * Calcula la volatilidad implícita usando Newton-Raphson.
-         * 
-         * @param {Object} params - Parámetros de la opción + marketPrice
-         * @returns {number|null} - Volatilidad implícita (%) o null si no converge
-         */
         function calculateImpliedVolatility(params) {
             const { marketPrice, type, spot, strike, daysToExpiration, riskFreeRate, dividendYield } = params;
 
             if (!marketPrice || marketPrice <= 0) return null;
 
-            // Valor intrínseco mínimo
             const intrinsic = type === 'call' 
                 ? Math.max(0, spot - strike * Math.exp(-riskFreeRate / 100 * daysToExpiration / DAYS_PER_YEAR))
                 : Math.max(0, strike * Math.exp(-riskFreeRate / 100 * daysToExpiration / DAYS_PER_YEAR) - spot);
             
-            if (marketPrice < intrinsic * 0.99) return null; // Precio menor que intrínseco
+            if (marketPrice < intrinsic * 0.99) return null;
 
-            // Estimación inicial usando aproximación de Brenner-Subrahmanyam
             let sigma = Math.sqrt(2 * Math.PI / (daysToExpiration / DAYS_PER_YEAR)) * (marketPrice / spot) * 100;
             sigma = Math.max(IV_BOUNDS.min, Math.min(IV_BOUNDS.max, sigma || 30));
 
@@ -614,53 +483,26 @@
                 const greeks = calculateGreeks(priceParams);
                 const vega = greeks.vega;
 
-                // Si vega es muy pequeño, ajustar manualmente
                 if (Math.abs(vega) < 1e-10) {
                     sigma = diff > 0 ? sigma * 0.8 : sigma * 1.2;
                 } else {
-                    // Newton-Raphson: σ_new = σ - f(σ)/f'(σ)
                     sigma = sigma - diff / vega;
                 }
 
-                // Mantener dentro de límites
                 sigma = Math.max(IV_BOUNDS.min, Math.min(IV_BOUNDS.max, sigma));
             }
 
-            return null; // No convergió
+            return null;
         }
 
-        /**
-         * Calcula el punto de breakeven para un warrant.
-         * 
-         * @param {string} type - 'call' o 'put'
-         * @param {number} strike - Precio de ejercicio
-         * @param {number} premium - Prima del warrant
-         * @param {number} ratio - Ratio de conversión
-         * @returns {number} - Precio de breakeven del subyacente
-         */
         function calculateBreakeven(type, strike, premium, ratio) {
-            // Premium por unidad de subyacente
             const premiumPerUnit = premium / ratio;
             return type === 'call' 
                 ? strike + premiumPerUnit 
                 : strike - premiumPerUnit;
         }
 
-        /**
-         * Ajusta la volatilidad ATM según el skew de mercado para índices de renta variable.
-         * 
-         * El skew captura el fenómeno donde opciones OTM (especialmente PUTs) cotizan
-         * con volatilidades implícitas superiores a las ATM.
-         * 
-         * @param {number} sigmaATM - Volatilidad ATM en % (ej: 28 para 28%)
-         * @param {number} S - Precio spot del subyacente
-         * @param {number} K - Precio de ejercicio (strike)
-         * @param {number} T - Tiempo a vencimiento en años
-         * @param {string} type - 'call' o 'put'
-         * @returns {number} - Volatilidad ajustada en %
-         */
         function adjustVolatilityForSkew(sigmaATM, S, K, T, type) {
-            // Parámetros calibrados para índices de renta variable
             const putSkewIntensity = 2.2;
             const callSkewIntensity = 0.5;
             const smileCurvature = 0.5;
@@ -696,14 +538,6 @@
             return Math.max(sigmaATM * 0.6, Math.min(sigmaATM * 2.5, adjustedVol));
         }
 
-        /**
-         * Determina el estado de moneyness de una opción.
-         * 
-         * @param {string} type - 'call' o 'put'
-         * @param {number} spot - Precio spot
-         * @param {number} strike - Precio de ejercicio
-         * @returns {Object} - { status: string, color: string, ratio: number }
-         */
         function getMoneyness(type, spot, strike) {
             const ratio = spot / strike;
             
@@ -719,12 +553,76 @@
         }
 
         // ============================================================================
-        // SECCIÓN 3: VALIDACIÓN DE INPUTS
+        // SECCIÓN 3: UTILIDADES PARA GRÁFICOS
         // ============================================================================
 
         /**
-         * Configuración de validación para cada campo.
+         * Calcula el rango óptimo del eje X para gráficos de payoff/precio.
+         * 
+         * El rango SIEMPRE incluye:
+         * - El precio spot actual
+         * - El precio strike
+         * - El punto de breakeven
+         * 
+         * Además añade un margen para visualizar la zona de ganancias/pérdidas.
+         * 
+         * @param {number} spot - Precio spot actual
+         * @param {number} strike - Precio de ejercicio
+         * @param {number} breakeven - Punto de breakeven
+         * @param {string} type - 'call' o 'put'
+         * @returns {Object} - { min, max, step }
          */
+        function calculateChartXRange(spot, strike, breakeven, type) {
+            // Validación de inputs
+            if (!spot || spot <= 0 || !strike || strike <= 0) {
+                return { min: 0, max: 100, step: 1 };
+            }
+
+            // Puntos clave que DEBEN estar en el gráfico
+            const keyPoints = [spot, strike];
+            if (breakeven && isFinite(breakeven) && breakeven > 0) {
+                keyPoints.push(breakeven);
+            }
+
+            const minKey = Math.min(...keyPoints);
+            const maxKey = Math.max(...keyPoints);
+            const keyRange = maxKey - minKey;
+
+            // Margen proporcional al rango de puntos clave
+            // Mínimo 15% del strike para asegurar visibilidad
+            const marginPercent = 0.25;
+            const minMargin = strike * 0.15;
+            const margin = Math.max(keyRange * marginPercent, minMargin);
+
+            // Para PUTs: queremos ver más hacia abajo del strike (zona de ganancias)
+            // Para CALLs: queremos ver más hacia arriba del strike (zona de ganancias)
+            let minPrice, maxPrice;
+            
+            if (type === 'put') {
+                // PUT gana cuando el precio baja → mostrar más rango por debajo del strike
+                minPrice = Math.max(0, minKey - margin * 1.5);
+                maxPrice = maxKey + margin;
+            } else {
+                // CALL gana cuando el precio sube → mostrar más rango por encima del strike
+                minPrice = Math.max(0, minKey - margin);
+                maxPrice = maxKey + margin * 1.5;
+            }
+
+            // Asegurar que el rango tiene sentido
+            if (maxPrice <= minPrice) {
+                maxPrice = minPrice + strike * 0.3;
+            }
+
+            // Calcular step para ~60 puntos de datos
+            const step = (maxPrice - minPrice) / 60;
+
+            return { min: minPrice, max: maxPrice, step };
+        }
+
+        // ============================================================================
+        // SECCIÓN 4: VALIDACIÓN DE INPUTS
+        // ============================================================================
+
         const VALIDATION_RULES = {
             spot: { min: 0.01, max: 1000000, message: 'Debe ser positivo' },
             strike: { min: 0.01, max: 1000000, message: 'Debe ser positivo' },
@@ -736,53 +634,31 @@
             marketPrice: { min: 0.000001, max: 1000000, message: 'Debe ser positivo' }
         };
 
-        /**
-         * Parsea un número aceptando tanto punto como coma como separador decimal.
-         * Esto permite usar formato europeo (1.234,56) o americano (1,234.56).
-         * 
-         * @param {string|number} value - Valor a parsear
-         * @returns {number} - Número parseado o NaN si es inválido
-         */
         function parseNumber(value) {
             if (typeof value === 'number') return value;
             if (typeof value !== 'string') return NaN;
             
-            // Eliminar espacios
             let cleaned = value.trim();
             
-            // Si tiene tanto punto como coma, determinar cuál es el decimal
             const hasComma = cleaned.includes(',');
             const hasDot = cleaned.includes('.');
             
             if (hasComma && hasDot) {
-                // Formato europeo: 1.234,56 → punto es miles, coma es decimal
-                // Formato americano: 1,234.56 → coma es miles, punto es decimal
                 const lastComma = cleaned.lastIndexOf(',');
                 const lastDot = cleaned.lastIndexOf('.');
                 
                 if (lastComma > lastDot) {
-                    // Coma es el separador decimal (formato europeo)
                     cleaned = cleaned.replace(/\./g, '').replace(',', '.');
                 } else {
-                    // Punto es el separador decimal (formato americano)
                     cleaned = cleaned.replace(/,/g, '');
                 }
             } else if (hasComma) {
-                // Solo tiene coma - asumimos que es separador decimal
                 cleaned = cleaned.replace(',', '.');
             }
-            // Si solo tiene punto, parseFloat lo maneja bien
             
             return parseFloat(cleaned);
         }
 
-        /**
-         * Valida todos los inputs del calculador.
-         * 
-         * @param {Object} inputs - Objeto con todos los valores de input
-         * @param {string} calculationMode - 'volatility' o 'impliedVol'
-         * @returns {Array} - Array de objetos { field, message }
-         */
         function validateInputs(inputs, calculationMode) {
             const errors = [];
             const { spot, strike, daysToExpiration, riskFreeRate, dividendYield, conversionRatio, volatility, marketPrice } = inputs;
@@ -818,12 +694,9 @@
         }
 
         // ============================================================================
-        // SECCIÓN 4: COMPONENTES DE UI
+        // SECCIÓN 5: COMPONENTES DE UI
         // ============================================================================
 
-        /**
-         * Componente de input numérico estilizado.
-         */
         function NumberInput({ label, value, onChange, step, error, hint, suffix }) {
             return (
                 <div className="mb-4">
@@ -850,9 +723,6 @@
             );
         }
 
-        /**
-         * Componente de tarjeta métrica.
-         */
         function MetricCard({ label, value, subvalue, color, highlight }) {
             return (
                 <div className={`bg-terminal-card rounded-lg border p-4 transition-smooth ${
@@ -869,9 +739,6 @@
             );
         }
 
-        /**
-         * Tooltip para gráfico de Payoff
-         */
         function PayoffTooltip({ active, payload, label }) {
             if (!active || !payload || !payload.length) return null;
             const data = payload[0]?.payload;
@@ -879,7 +746,7 @@
             return (
                 <div className="bg-terminal-card border border-terminal-border rounded-lg p-3 shadow-lg">
                     <p className="text-terminal-text font-mono text-sm font-bold mb-2">
-                        Spot: {label}
+                        Spot: {typeof label === 'number' ? label.toLocaleString() : label}
                     </p>
                     <p className="text-gray-400 text-xs mb-2">
                         ({data?.priceChange >= 0 ? '+' : ''}{data?.priceChange}% vs actual)
@@ -894,9 +761,6 @@
             );
         }
 
-        /**
-         * Tooltip para gráfico de evolución de precio
-         */
         function PriceEvolutionTooltip({ active, payload, label }) {
             if (!active || !payload || !payload.length) return null;
             const data = payload[0]?.payload;
@@ -904,7 +768,7 @@
             return (
                 <div className="bg-terminal-card border border-terminal-border rounded-lg p-3 shadow-lg">
                     <p className="text-terminal-text font-mono text-sm font-bold mb-2">
-                        Spot: {label}
+                        Spot: {typeof label === 'number' ? label.toLocaleString() : label}
                     </p>
                     <p className="text-gray-400 text-xs mb-2">
                         ({data?.priceChange >= 0 ? '+' : ''}{data?.priceChange}% vs actual)
@@ -919,13 +783,11 @@
         }
 
         // ============================================================================
-        // SECCIÓN 5: COMPONENTE PRINCIPAL
+        // SECCIÓN 6: COMPONENTE PRINCIPAL
         // ============================================================================
 
         function WarrantCalculator() {
-            // ─────────────────────────────────────────────────────────────────
             // Estado del componente
-            // ─────────────────────────────────────────────────────────────────
             const [selectedAsset, setSelectedAsset] = useState('EUROSTOXX50');
             const [autoFillEnabled, setAutoFillEnabled] = useState(true);
             const [warrantType, setWarrantType] = useState('put');
@@ -942,9 +804,7 @@
 
             const currentAsset = UNDERLYING_ASSETS[selectedAsset];
 
-            // ─────────────────────────────────────────────────────────────────
             // Auto-fill cuando cambia el activo
-            // ─────────────────────────────────────────────────────────────────
             useEffect(() => {
                 if (autoFillEnabled && selectedAsset !== 'CUSTOM') {
                     const asset = UNDERLYING_ASSETS[selectedAsset];
@@ -954,7 +814,6 @@
                         setDividendYield(String(asset.dividendYield));
                         setVolatility(String(asset.volatility));
                         
-                        // Strike redondeado según magnitud del precio
                         const magnitude = Math.pow(10, Math.floor(Math.log10(asset.spotPrice)) - 1);
                         const roundedStrike = Math.round(asset.spotPrice / magnitude) * magnitude;
                         setStrike(String(roundedStrike));
@@ -962,9 +821,7 @@
                 }
             }, [selectedAsset, autoFillEnabled]);
 
-            // ─────────────────────────────────────────────────────────────────
             // Validación
-            // ─────────────────────────────────────────────────────────────────
             const errors = useMemo(() => {
                 return validateInputs({
                     spot, strike, daysToExpiration, riskFreeRate,
@@ -977,9 +834,7 @@
                 return err ? err.message : null;
             }, [errors]);
 
-            // ─────────────────────────────────────────────────────────────────
             // Cálculos principales
-            // ─────────────────────────────────────────────────────────────────
             const results = useMemo(() => {
                 if (errors.length > 0) return null;
 
@@ -1002,7 +857,6 @@
                 if (calculationMode === 'volatility') {
                     inputVolatility = parseNumber(volatility);
                     
-                    // Aplicar ajuste de skew si está habilitado
                     if (enableSkewAdjustment) {
                         const T = daysNum / DAYS_PER_YEAR;
                         usedVolatility = adjustVolatilityForSkew(
@@ -1029,34 +883,24 @@
                     premium = marketPriceNum;
                 }
 
-                // Calcular Greeks con la volatilidad usada
                 const greekParams = { ...baseParams, volatility: usedVolatility };
                 const greeks = calculateGreeks(greekParams);
 
-                // Greeks ajustadas por ratio de conversión
                 const deltaWarrant = greeks.delta * ratio;
                 const gammaWarrant = greeks.gamma * ratio;
                 const thetaWarrant = greeks.theta * ratio;
                 const vegaWarrant = greeks.vega * ratio;
                 const rhoWarrant = greeks.rho * ratio;
 
-                // Breakeven
                 const breakeven = calculateBreakeven(warrantType, strikeNum, premium, ratio);
-
-                // Moneyness
                 const moneynessInfo = getMoneyness(warrantType, spotNum, strikeNum);
 
-                // Valor intrínseco y temporal
                 let intrinsicValue = warrantType === 'call'
                     ? Math.max(0, spotNum - strikeNum) * ratio
                     : Math.max(0, strikeNum - spotNum) * ratio;
                 
                 const timeValue = Math.max(0, premium - intrinsicValue);
-
-                // P&L al vencimiento si el spot se mantiene
                 const profitLossAtExpiry = intrinsicValue - premium;
-
-                // Apalancamiento (leverage)
                 const leverage = (spotNum * Math.abs(greeks.delta)) / (premium / ratio);
 
                 return {
@@ -1087,34 +931,29 @@
             }, [errors, warrantType, spot, strike, daysToExpiration, riskFreeRate, dividendYield, conversionRatio, calculationMode, volatility, marketPrice, enableSkewAdjustment]);
 
             // ─────────────────────────────────────────────────────────────────
-            // Datos para gráfico de payoff
+            // Datos para gráfico de payoff - CORREGIDO
             // ─────────────────────────────────────────────────────────────────
-            // Nota: Mostramos P&L por cada 100€ invertidos para mejor legibilidad
             const payoffData = useMemo(() => {
-                if (!results) return [];
+                if (!results) return { data: [], numWarrants: 0, inversion: 0 };
 
                 const strikeNum = parseNumber(strike);
                 const ratio = parseNumber(conversionRatio);
                 const spotNum = parseNumber(spot);
                 const premium = results.premium;
                 
-                // Rango centrado en el spot actual (±20%)
-                const range = spotNum * 0.20;
-                const minPrice = Math.max(spotNum - range, strikeNum * 0.5);
-                const maxPrice = spotNum + range;
-                const step = (maxPrice - minPrice) / 60;
+                // CORRECCIÓN: Usar la función que calcula el rango correcto
+                const xRange = calculateChartXRange(spotNum, strikeNum, results.breakeven, warrantType);
 
                 // Calcular cuántos warrants compramos con 100€
                 const inversion = 100;
                 const numWarrants = Math.floor(inversion / premium);
 
                 const data = [];
-                for (let price = minPrice; price <= maxPrice; price += step) {
+                for (let price = xRange.min; price <= xRange.max; price += xRange.step) {
                     const intrinsicPerWarrant = warrantType === 'call'
                         ? Math.max(0, price - strikeNum) * ratio
                         : Math.max(0, strikeNum - price) * ratio;
                     
-                    // P&L total para la inversión de 100€
                     const plTotal = (intrinsicPerWarrant - premium) * numWarrants;
                     const plPercent = (plTotal / inversion) * 100;
                     
@@ -1129,9 +968,8 @@
             }, [results, spot, strike, warrantType, conversionRatio]);
 
             // ─────────────────────────────────────────────────────────────────
-            // Datos para gráfico de evolución del precio en el tiempo
+            // Datos para gráfico de evolución del precio - CORREGIDO
             // ─────────────────────────────────────────────────────────────────
-            // Muestra cómo cambia el precio del warrant conforme pasa el tiempo
             const priceEvolutionData = useMemo(() => {
                 if (!results || calculationMode !== 'volatility') {
                     return { data: [], timePoints: [] };
@@ -1143,13 +981,11 @@
                 const daysNum = parseInt(daysToExpiration);
                 const volNum = results.usedVolatility;
                 
-                // Rango centrado en spot actual (±15%)
-                const range = spotNum * 0.15;
-                const minPrice = Math.max(spotNum - range, strikeNum * 0.6);
-                const maxPrice = spotNum + range;
-                const step = (maxPrice - minPrice) / 30;
+                // CORRECCIÓN: Usar la función que calcula el rango correcto
+                const xRange = calculateChartXRange(spotNum, strikeNum, results.breakeven, warrantType);
+                // Para este gráfico usamos menos puntos (30)
+                const step = (xRange.max - xRange.min) / 30;
 
-                // Definir puntos temporales claros
                 const timePoints = [
                     { days: daysNum, label: 'Hoy', color: COLORS.primary },
                     { days: Math.max(Math.round(daysNum / 2), 1), label: `${Math.max(Math.round(daysNum / 2), 1)}d`, color: COLORS.success },
@@ -1157,7 +993,7 @@
                 ];
 
                 const data = [];
-                for (let price = minPrice; price <= maxPrice; price += step) {
+                for (let price = xRange.min; price <= xRange.max; price += step) {
                     const point = { 
                         price: parseFloat(price.toFixed(0)),
                         priceChange: parseFloat((((price / spotNum) - 1) * 100).toFixed(1))
@@ -1173,7 +1009,6 @@
                             dividendYield: parseNumber(dividendYield),
                             volatility: volNum
                         };
-                        // Precio del warrant (en céntimos para mejor lectura)
                         const warrantPrice = blackScholesPrice(params) * ratio * 100;
                         point[tp.label] = parseFloat(warrantPrice.toFixed(2));
                     });
@@ -1184,9 +1019,7 @@
                 return { data, timePoints };
             }, [results, spot, strike, daysToExpiration, riskFreeRate, dividendYield, warrantType, conversionRatio, calculationMode]);
 
-            // ─────────────────────────────────────────────────────────────────
             // Render
-            // ─────────────────────────────────────────────────────────────────
             return (
                 <div className="min-h-screen">
                     {/* Header */}
@@ -1205,7 +1038,7 @@
                                     {new Date().toLocaleDateString('es-ES')}
                                 </span>
                                 <span className="px-2 py-1 bg-terminal-accent/20 text-terminal-accent text-xs font-mono rounded">
-                                    v3.1
+                                    v3.2
                                 </span>
                             </div>
                         </div>
@@ -1215,9 +1048,7 @@
                     <main className="max-w-7xl mx-auto px-4 py-6">
                         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                             
-                            {/* ═══════════════════════════════════════════════════════════ */}
                             {/* Panel de Inputs */}
-                            {/* ═══════════════════════════════════════════════════════════ */}
                             <div className="lg:col-span-4">
                                 <div className="bg-terminal-panel rounded-xl border border-terminal-border p-5 sticky top-6">
                                     
@@ -1372,7 +1203,6 @@
                                                     error={getError('volatility')}
                                                 />
                                                 
-                                                {/* Control de Volatility Skew */}
                                                 <div className="mt-3 p-3 bg-terminal-bg rounded-lg border border-terminal-border">
                                                     <div className="flex items-center justify-between">
                                                         <label className="flex items-center cursor-pointer">
@@ -1415,9 +1245,7 @@
                                 </div>
                             </div>
 
-                            {/* ═══════════════════════════════════════════════════════════ */}
                             {/* Panel de Resultados */}
-                            {/* ═══════════════════════════════════════════════════════════ */}
                             <div className="lg:col-span-8 space-y-6">
                                 {results ? (
                                     <>
@@ -1493,7 +1321,6 @@
                                                 </div>
                                             </div>
 
-                                            {/* Info adicional */}
                                             <div className="mt-4 pt-4 border-t border-terminal-border grid grid-cols-3 gap-4 text-center">
                                                 <div>
                                                     <p className="text-xs text-gray-500">Moneyness</p>
@@ -1561,13 +1388,19 @@
                                                         x={parseNumber(strike)} 
                                                         stroke={COLORS.muted} 
                                                         strokeDasharray="5 5" 
-                                                        label={{ value: `K=${strike}`, fill: COLORS.muted, fontSize: 9, position: 'top' }} 
+                                                        label={{ value: `K=${parseNumber(strike).toLocaleString()}`, fill: COLORS.muted, fontSize: 9, position: 'top' }} 
                                                     />
                                                     <ReferenceLine 
                                                         x={results.breakeven} 
                                                         stroke={COLORS.warning} 
                                                         strokeDasharray="5 5" 
-                                                        label={{ value: `BE=${results.breakeven.toFixed(0)}`, fill: COLORS.warning, fontSize: 9, position: 'top' }} 
+                                                        label={{ value: `BE=${results.breakeven.toLocaleString(undefined, {maximumFractionDigits: 0})}`, fill: COLORS.warning, fontSize: 9, position: 'top' }} 
+                                                    />
+                                                    <ReferenceLine 
+                                                        x={parseNumber(spot)} 
+                                                        stroke={COLORS.primary} 
+                                                        strokeDasharray="3 3" 
+                                                        label={{ value: 'Spot', fill: COLORS.primary, fontSize: 9, position: 'bottom' }} 
                                                     />
                                                     <Area 
                                                         type="monotone" 
@@ -1580,7 +1413,7 @@
                                                 </AreaChart>
                                             </ResponsiveContainer>
                                             <p className="text-xs text-gray-600 mt-3 text-center">
-                                                📍 Strike (K) = {strike} | 🎯 Breakeven = {results.breakeven.toFixed(0)} | 
+                                                📍 Strike (K) = {parseNumber(strike).toLocaleString()} | 🎯 Breakeven = {results.breakeven.toLocaleString(undefined, {maximumFractionDigits: 0})} | 
                                                 {warrantType === 'put' ? ' Ganas si el índice BAJA' : ' Ganas si el índice SUBE'}
                                             </p>
                                         </div>
@@ -1626,6 +1459,12 @@
                                                             strokeDasharray="5 5"
                                                             label={{ value: 'Spot actual', fill: COLORS.text, fontSize: 9, position: 'top' }}
                                                         />
+                                                        <ReferenceLine 
+                                                            x={parseNumber(strike)} 
+                                                            stroke={COLORS.muted} 
+                                                            strokeDasharray="5 5"
+                                                            label={{ value: 'Strike', fill: COLORS.muted, fontSize: 9, position: 'bottom' }}
+                                                        />
                                                         {priceEvolutionData.timePoints.map((tp, idx) => {
                                                             const colors = [COLORS.primary, COLORS.success, COLORS.danger];
                                                             return (
@@ -1670,7 +1509,7 @@
                     {/* Footer */}
                     <footer className="bg-terminal-panel border-t border-terminal-border px-6 py-4 mt-12">
                         <div className="max-w-7xl mx-auto flex justify-between items-center text-xs text-gray-600">
-                            <p>European Warrant Calculator v3.1 · Black-Scholes-Merton + Volatility Skew</p>
+                            <p>European Warrant Calculator v3.2 · Black-Scholes-Merton + Volatility Skew</p>
                             <p>Solo para fines educativos · No es asesoramiento financiero</p>
                         </div>
                     </footer>
@@ -1678,9 +1517,7 @@
             );
         }
 
-        // ============================================================================
-        // PUNTO DE ENTRADA
-        // ============================================================================
+        // Punto de entrada
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(React.createElement(WarrantCalculator));
     </script>
