@@ -7,12 +7,7 @@
     <meta name="keywords" content="warrant, opciones, Black-Scholes, derivados, trading, BNP Paribas">
     <meta name="author" content="Mateo Madrigal">
     
-    <!-- Open Graph -->
-    <meta property="og:title" content="European Warrant Calculator">
-    <meta property="og:description" content="Calculadora profesional de warrants con Black-Scholes">
-    <meta property="og:type" content="website">
-    
-    <title>European Warrant Calculator v3.2 - Axis Fix</title>
+    <title>European Warrant Calculator v3.3 - Scenario Analysis</title>
 
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
@@ -64,9 +59,7 @@
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 
     <style>
-        * {
-            box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
         
         body {
             margin: 0;
@@ -78,56 +71,29 @@
             -moz-osx-font-smoothing: grayscale;
         }
 
-        /* Hide number input spinners */
         input[type="number"]::-webkit-inner-spin-button,
         input[type="number"]::-webkit-outer-spin-button {
             -webkit-appearance: none;
             margin: 0;
         }
-        input[type="number"] {
-            -moz-appearance: textfield;
-        }
+        input[type="number"] { -moz-appearance: textfield; }
 
-        /* Custom scrollbar */
-        ::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #0A0E1A;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #374151;
-            border-radius: 3px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #4B5563;
-        }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #0A0E1A; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4B5563; }
 
-        /* Smooth transitions */
-        .transition-smooth {
-            transition: all 0.2s ease-in-out;
-        }
+        .transition-smooth { transition: all 0.2s ease-in-out; }
+        .glow-blue { box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }
+        .glow-green { box-shadow: 0 0 15px rgba(16, 185, 129, 0.2); }
+        .glow-red { box-shadow: 0 0 15px rgba(239, 68, 68, 0.2); }
 
-        /* Glow effects */
-        .glow-blue {
-            box-shadow: 0 0 20px rgba(59, 130, 246, 0.3);
-        }
-        .glow-green {
-            box-shadow: 0 0 15px rgba(16, 185, 129, 0.2);
-        }
-        .glow-red {
-            box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
-        }
-
-        /* Input focus states */
         input:focus, select:focus {
             outline: none;
             border-color: #3B82F6;
             box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
         }
 
-        /* Grid pattern background */
         .grid-pattern {
             background-image: 
                 linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
@@ -141,13 +107,13 @@
 
     <script type="text/babel">
         // ============================================================================
-        // EUROPEAN WARRANT CALCULATOR v3.2 - Axis Fix
+        // EUROPEAN WARRANT CALCULATOR v3.3 - Scenario Analysis
         // ============================================================================
         // Implementación profesional del modelo Black-Scholes-Merton para warrants
-        // europeos con todas las Greeks y análisis completo de sensibilidad.
+        // europeos con análisis de escenarios basado en GBM.
         //
-        // v3.2: Corregido el rango del eje X en gráficos para incluir siempre
-        //       strike, spot y breakeven.
+        // v3.3: Nuevo gráfico de evolución temporal con escenarios (Optimista/Normal/Pesimista)
+        //       usando Geometric Brownian Motion para proyecciones consistentes.
         //
         // Autor: Mateo Madrigal
         // Licencia: MIT
@@ -156,7 +122,8 @@
         const { useState, useMemo, useEffect, useCallback } = React;
         const { 
             LineChart, Line, XAxis, YAxis, CartesianGrid, 
-            Tooltip, Legend, ResponsiveContainer, ReferenceLine, Area, AreaChart 
+            Tooltip, Legend, ResponsiveContainer, ReferenceLine, Area, AreaChart,
+            ComposedChart
         } = Recharts;
 
         // ============================================================================
@@ -177,7 +144,12 @@
             text: '#E5E7EB',
             background: '#0A0E1A',
             card: '#1F2937',
-            border: '#374151'
+            border: '#374151',
+            // Colores específicos para escenarios
+            optimistic: '#22C55E',      // Verde brillante
+            neutral: '#F59E0B',         // Ámbar
+            pessimistic: '#EF4444',     // Rojo
+            cone: 'rgba(59, 130, 246, 0.1)' // Área del cono
         };
 
         const UNDERLYING_ASSETS = {
@@ -553,32 +525,63 @@
         }
 
         // ============================================================================
-        // SECCIÓN 3: UTILIDADES PARA GRÁFICOS
+        // SECCIÓN 3: GEOMETRIC BROWNIAN MOTION - PROYECCIÓN DE ESCENARIOS
         // ============================================================================
 
         /**
-         * Calcula el rango óptimo del eje X para gráficos de payoff/precio.
+         * Proyecta el precio del subyacente usando Geometric Brownian Motion (GBM).
          * 
-         * El rango SIEMPRE incluye:
-         * - El precio spot actual
-         * - El precio strike
-         * - El punto de breakeven
+         * El modelo GBM asume:
+         * S(t) = S₀ · exp[(μ - σ²/2)·t + σ·√t·Z]
          * 
-         * Además añade un margen para visualizar la zona de ganancias/pérdidas.
+         * Donde:
+         * - S₀: Precio spot inicial
+         * - μ: Drift (r - q en riesgo neutral)
+         * - σ: Volatilidad
+         * - t: Tiempo en años
+         * - Z: Número de desviaciones estándar (escenario)
          * 
-         * @param {number} spot - Precio spot actual
-         * @param {number} strike - Precio de ejercicio
-         * @param {number} breakeven - Punto de breakeven
-         * @param {string} type - 'call' o 'put'
-         * @returns {Object} - { min, max, step }
+         * @param {number} S0 - Precio spot inicial
+         * @param {number} r - Tasa libre de riesgo (decimal)
+         * @param {number} q - Dividend yield (decimal)
+         * @param {number} sigma - Volatilidad (decimal)
+         * @param {number} t - Tiempo transcurrido en años
+         * @param {number} z - Número de desviaciones estándar
+         * @returns {number} - Precio proyectado
          */
+        function projectSpotGBM(S0, r, q, sigma, t, z) {
+            if (t <= 0) return S0;
+            
+            // Drift bajo medida de probabilidad real (aproximación)
+            // Usamos r-q como proxy del drift esperado
+            const mu = r - q;
+            
+            // GBM: S(t) = S₀ · exp[(μ - σ²/2)·t + σ·√t·Z]
+            const drift = (mu - 0.5 * sigma * sigma) * t;
+            const diffusion = sigma * Math.sqrt(t) * z;
+            
+            return S0 * Math.exp(drift + diffusion);
+        }
+
+        /**
+         * Calcula el percentil correspondiente a un número de desviaciones estándar.
+         * 
+         * @param {number} z - Número de desviaciones estándar
+         * @returns {number} - Percentil (0-100)
+         */
+        function zToPercentile(z) {
+            return normalCDF(z) * 100;
+        }
+
+        // ============================================================================
+        // SECCIÓN 4: UTILIDADES PARA GRÁFICOS
+        // ============================================================================
+
         function calculateChartXRange(spot, strike, breakeven, type) {
-            // Validación de inputs
             if (!spot || spot <= 0 || !strike || strike <= 0) {
                 return { min: 0, max: 100, step: 1 };
             }
 
-            // Puntos clave que DEBEN estar en el gráfico
             const keyPoints = [spot, strike];
             if (breakeven && isFinite(breakeven) && breakeven > 0) {
                 keyPoints.push(breakeven);
@@ -588,39 +591,31 @@
             const maxKey = Math.max(...keyPoints);
             const keyRange = maxKey - minKey;
 
-            // Margen proporcional al rango de puntos clave
-            // Mínimo 15% del strike para asegurar visibilidad
             const marginPercent = 0.25;
             const minMargin = strike * 0.15;
             const margin = Math.max(keyRange * marginPercent, minMargin);
 
-            // Para PUTs: queremos ver más hacia abajo del strike (zona de ganancias)
-            // Para CALLs: queremos ver más hacia arriba del strike (zona de ganancias)
             let minPrice, maxPrice;
             
             if (type === 'put') {
-                // PUT gana cuando el precio baja → mostrar más rango por debajo del strike
                 minPrice = Math.max(0, minKey - margin * 1.5);
                 maxPrice = maxKey + margin;
             } else {
-                // CALL gana cuando el precio sube → mostrar más rango por encima del strike
                 minPrice = Math.max(0, minKey - margin);
                 maxPrice = maxKey + margin * 1.5;
             }
 
-            // Asegurar que el rango tiene sentido
             if (maxPrice <= minPrice) {
                 maxPrice = minPrice + strike * 0.3;
             }
 
-            // Calcular step para ~60 puntos de datos
             const step = (maxPrice - minPrice) / 60;
 
             return { min: minPrice, max: maxPrice, step };
         }
 
         // ============================================================================
-        // SECCIÓN 4: VALIDACIÓN DE INPUTS
+        // SECCIÓN 5: VALIDACIÓN DE INPUTS
         // ============================================================================
 
         const VALIDATION_RULES = {
@@ -694,7 +689,7 @@
         }
 
         // ============================================================================
-        // SECCIÓN 5: COMPONENTES DE UI
+        // SECCIÓN 6: COMPONENTES DE UI
         // ============================================================================
 
         function NumberInput({ label, value, onChange, step, error, hint, suffix }) {
@@ -782,8 +777,83 @@
             );
         }
 
+        /**
+         * Tooltip personalizado para el gráfico de escenarios
+         */
+        function ScenarioTooltip({ active, payload, label, warrantType }) {
+            if (!active || !payload || !payload.length) return null;
+            const data = payload[0]?.payload;
+            
+            return (
+                <div className="bg-terminal-card border border-terminal-border rounded-lg p-4 shadow-xl min-w-[220px]">
+                    <div className="border-b border-terminal-border pb-2 mb-3">
+                        <p className="text-terminal-text font-mono text-sm font-bold">
+                            Día {data?.day} de {data?.totalDays}
+                        </p>
+                        <p className="text-gray-500 text-xs">
+                            {data?.daysRemaining} días hasta vencimiento
+                        </p>
+                    </div>
+                    
+                    <div className="space-y-2">
+                        {/* Escenario Optimista */}
+                        <div className="flex justify-between items-center">
+                            <span className="text-xs" style={{ color: COLORS.optimistic }}>
+                                ▲ Optimista
+                            </span>
+                            <div className="text-right">
+                                <span className="font-mono text-sm" style={{ color: COLORS.optimistic }}>
+                                    {data?.optimistic?.toFixed(4)} €
+                                </span>
+                                <span className="text-gray-500 text-xs ml-2">
+                                    (S: {data?.spotOptimistic?.toLocaleString()})
+                                </span>
+                            </div>
+                        </div>
+                        
+                        {/* Escenario Neutral */}
+                        <div className="flex justify-between items-center">
+                            <span className="text-xs" style={{ color: COLORS.neutral }}>
+                                ● Neutral
+                            </span>
+                            <div className="text-right">
+                                <span className="font-mono text-sm" style={{ color: COLORS.neutral }}>
+                                    {data?.neutral?.toFixed(4)} €
+                                </span>
+                                <span className="text-gray-500 text-xs ml-2">
+                                    (S: {data?.spotNeutral?.toLocaleString()})
+                                </span>
+                            </div>
+                        </div>
+                        
+                        {/* Escenario Pesimista */}
+                        <div className="flex justify-between items-center">
+                            <span className="text-xs" style={{ color: COLORS.pessimistic }}>
+                                ▼ Pesimista
+                            </span>
+                            <div className="text-right">
+                                <span className="font-mono text-sm" style={{ color: COLORS.pessimistic }}>
+                                    {data?.pessimistic?.toFixed(4)} €
+                                </span>
+                                <span className="text-gray-500 text-xs ml-2">
+                                    (S: {data?.spotPessimistic?.toLocaleString()})
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {/* Rango de incertidumbre */}
+                    <div className="mt-3 pt-2 border-t border-terminal-border">
+                        <p className="text-gray-500 text-xs">
+                            Rango: {((data?.optimistic / data?.pessimistic - 1) * 100).toFixed(0)}% diferencia
+                        </p>
+                    </div>
+                </div>
+            );
+        }
+
         // ============================================================================
-        // SECCIÓN 6: COMPONENTE PRINCIPAL
+        // SECCIÓN 7: COMPONENTE PRINCIPAL
         // ============================================================================
 
         function WarrantCalculator() {
@@ -801,6 +871,10 @@
             const [volatility, setVolatility] = useState('16');
             const [marketPrice, setMarketPrice] = useState('');
             const [enableSkewAdjustment, setEnableSkewAdjustment] = useState(true);
+            
+            // Estado para configuración de escenarios
+            const [scenarioSigma, setScenarioSigma] = useState('1.0');
+            const [showScenarioChart, setShowScenarioChart] = useState(true);
 
             const currentAsset = UNDERLYING_ASSETS[selectedAsset];
 
@@ -930,9 +1004,7 @@
                 };
             }, [errors, warrantType, spot, strike, daysToExpiration, riskFreeRate, dividendYield, conversionRatio, calculationMode, volatility, marketPrice, enableSkewAdjustment]);
 
-            // ─────────────────────────────────────────────────────────────────
-            // Datos para gráfico de payoff - CORREGIDO
-            // ─────────────────────────────────────────────────────────────────
+            // Datos para gráfico de payoff
             const payoffData = useMemo(() => {
                 if (!results) return { data: [], numWarrants: 0, inversion: 0 };
 
@@ -941,10 +1013,8 @@
                 const spotNum = parseNumber(spot);
                 const premium = results.premium;
                 
-                // CORRECCIÓN: Usar la función que calcula el rango correcto
                 const xRange = calculateChartXRange(spotNum, strikeNum, results.breakeven, warrantType);
 
-                // Calcular cuántos warrants compramos con 100€
                 const inversion = 100;
                 const numWarrants = Math.floor(inversion / premium);
 
@@ -968,56 +1038,134 @@
             }, [results, spot, strike, warrantType, conversionRatio]);
 
             // ─────────────────────────────────────────────────────────────────
-            // Datos para gráfico de evolución del precio - CORREGIDO
+            // NUEVO: Datos para gráfico de escenarios temporales
             // ─────────────────────────────────────────────────────────────────
-            const priceEvolutionData = useMemo(() => {
+            const scenarioData = useMemo(() => {
                 if (!results || calculationMode !== 'volatility') {
-                    return { data: [], timePoints: [] };
+                    return { data: [], finalValues: null };
                 }
 
-                const strikeNum = parseNumber(strike);
                 const spotNum = parseNumber(spot);
+                const strikeNum = parseNumber(strike);
                 const ratio = parseNumber(conversionRatio);
                 const daysNum = parseInt(daysToExpiration);
-                const volNum = results.usedVolatility;
-                
-                // CORRECCIÓN: Usar la función que calcula el rango correcto
-                const xRange = calculateChartXRange(spotNum, strikeNum, results.breakeven, warrantType);
-                // Para este gráfico usamos menos puntos (30)
-                const step = (xRange.max - xRange.min) / 30;
+                const r = parseNumber(riskFreeRate) / 100;
+                const q = parseNumber(dividendYield) / 100;
+                const sigma = results.usedVolatility / 100;
+                const zSigma = parseNumber(scenarioSigma);
 
-                const timePoints = [
-                    { days: daysNum, label: 'Hoy', color: COLORS.primary },
-                    { days: Math.max(Math.round(daysNum / 2), 1), label: `${Math.max(Math.round(daysNum / 2), 1)}d`, color: COLORS.success },
-                    { days: 1, label: 'Vencimiento', color: COLORS.danger }
-                ];
+                // Determinar la dirección "optimista" según el tipo de warrant
+                // Para PUT: optimista = precio baja (z negativo)
+                // Para CALL: optimista = precio sube (z positivo)
+                const zOptimistic = warrantType === 'put' ? -zSigma : zSigma;
+                const zPessimistic = warrantType === 'put' ? zSigma : -zSigma;
 
                 const data = [];
-                for (let price = xRange.min; price <= xRange.max; price += step) {
-                    const point = { 
-                        price: parseFloat(price.toFixed(0)),
-                        priceChange: parseFloat((((price / spotNum) - 1) * 100).toFixed(1))
-                    };
+                const numPoints = Math.min(daysNum, 60); // Máximo 60 puntos
+                const dayStep = Math.max(1, Math.floor(daysNum / numPoints));
+
+                for (let day = 0; day <= daysNum; day += dayStep) {
+                    const t = day / DAYS_PER_YEAR; // Tiempo transcurrido
+                    const daysRemaining = daysNum - day;
                     
-                    timePoints.forEach(tp => {
+                    // Proyectar spots para cada escenario
+                    const spotOptimistic = projectSpotGBM(spotNum, r, q, sigma, t, zOptimistic);
+                    const spotNeutral = projectSpotGBM(spotNum, r, q, sigma, t, 0);
+                    const spotPessimistic = projectSpotGBM(spotNum, r, q, sigma, t, zPessimistic);
+
+                    // Calcular precio del warrant para cada escenario
+                    const calcWarrantPrice = (spotProjected) => {
+                        if (daysRemaining <= 0) {
+                            // Al vencimiento: valor intrínseco
+                            const intrinsic = warrantType === 'call'
+                                ? Math.max(0, spotProjected - strikeNum)
+                                : Math.max(0, strikeNum - spotProjected);
+                            return intrinsic * ratio;
+                        }
+                        
                         const params = {
                             type: warrantType,
-                            spot: price,
+                            spot: spotProjected,
                             strike: strikeNum,
-                            daysToExpiration: tp.days,
+                            daysToExpiration: daysRemaining,
                             riskFreeRate: parseNumber(riskFreeRate),
                             dividendYield: parseNumber(dividendYield),
-                            volatility: volNum
+                            volatility: results.usedVolatility
                         };
-                        const warrantPrice = blackScholesPrice(params) * ratio * 100;
-                        point[tp.label] = parseFloat(warrantPrice.toFixed(2));
+                        return blackScholesPrice(params) * ratio;
+                    };
+
+                    const priceOptimistic = calcWarrantPrice(spotOptimistic);
+                    const priceNeutral = calcWarrantPrice(spotNeutral);
+                    const pricePessimistic = calcWarrantPrice(spotPessimistic);
+
+                    data.push({
+                        day,
+                        totalDays: daysNum,
+                        daysRemaining,
+                        // Precios del warrant
+                        optimistic: priceOptimistic,
+                        neutral: priceNeutral,
+                        pessimistic: pricePessimistic,
+                        // Para área sombreada
+                        range: [pricePessimistic, priceOptimistic],
+                        // Spots proyectados (para tooltip)
+                        spotOptimistic: Math.round(spotOptimistic),
+                        spotNeutral: Math.round(spotNeutral),
+                        spotPessimistic: Math.round(spotPessimistic)
                     });
-                    
-                    data.push(point);
                 }
 
-                return { data, timePoints };
-            }, [results, spot, strike, daysToExpiration, riskFreeRate, dividendYield, warrantType, conversionRatio, calculationMode]);
+                // Asegurar que el último punto sea exactamente el vencimiento
+                if (data.length > 0 && data[data.length - 1].day !== daysNum) {
+                    const t = daysNum / DAYS_PER_YEAR;
+                    const spotOptimistic = projectSpotGBM(spotNum, r, q, sigma, t, zOptimistic);
+                    const spotNeutral = projectSpotGBM(spotNum, r, q, sigma, t, 0);
+                    const spotPessimistic = projectSpotGBM(spotNum, r, q, sigma, t, zPessimistic);
+
+                    // Valores intrínsecos al vencimiento
+                    const intrinsicOpt = warrantType === 'call'
+                        ? Math.max(0, spotOptimistic - strikeNum) * ratio
+                        : Math.max(0, strikeNum - spotOptimistic) * ratio;
+                    const intrinsicNeu = warrantType === 'call'
+                        ? Math.max(0, spotNeutral - strikeNum) * ratio
+                        : Math.max(0, strikeNum - spotNeutral) * ratio;
+                    const intrinsicPes = warrantType === 'call'
+                        ? Math.max(0, spotPessimistic - strikeNum) * ratio
+                        : Math.max(0, strikeNum - spotPessimistic) * ratio;
+
+                    data.push({
+                        day: daysNum,
+                        totalDays: daysNum,
+                        daysRemaining: 0,
+                        optimistic: intrinsicOpt,
+                        neutral: intrinsicNeu,
+                        pessimistic: intrinsicPes,
+                        range: [intrinsicPes, intrinsicOpt],
+                        spotOptimistic: Math.round(spotOptimistic),
+                        spotNeutral: Math.round(spotNeutral),
+                        spotPessimistic: Math.round(spotPessimistic)
+                    });
+                }
+
+                // Valores finales para mostrar en resumen
+                const finalValues = data.length > 0 ? {
+                    optimistic: data[data.length - 1].optimistic,
+                    neutral: data[data.length - 1].neutral,
+                    pessimistic: data[data.length - 1].pessimistic,
+                    spotOptimistic: data[data.length - 1].spotOptimistic,
+                    spotNeutral: data[data.length - 1].spotNeutral,
+                    spotPessimistic: data[data.length - 1].spotPessimistic,
+                    percentileOptimistic: warrantType === 'put' 
+                        ? zToPercentile(-parseNumber(scenarioSigma))
+                        : zToPercentile(parseNumber(scenarioSigma)),
+                    percentilePessimistic: warrantType === 'put'
+                        ? zToPercentile(parseNumber(scenarioSigma))
+                        : zToPercentile(-parseNumber(scenarioSigma))
+                } : null;
+
+                return { data, finalValues };
+            }, [results, spot, strike, daysToExpiration, riskFreeRate, dividendYield, warrantType, conversionRatio, calculationMode, scenarioSigma]);
 
             // Render
             return (
@@ -1030,7 +1178,7 @@
                                     European Warrant Calculator
                                 </h1>
                                 <p className="text-xs text-gray-500 mt-0.5">
-                                    Black-Scholes-Merton Model · Full Greeks Analysis
+                                    Black-Scholes-Merton · Greeks · Scenario Analysis
                                 </p>
                             </div>
                             <div className="flex items-center gap-4">
@@ -1038,7 +1186,7 @@
                                     {new Date().toLocaleDateString('es-ES')}
                                 </span>
                                 <span className="px-2 py-1 bg-terminal-accent/20 text-terminal-accent text-xs font-mono rounded">
-                                    v3.2
+                                    v3.3
                                 </span>
                             </div>
                         </div>
@@ -1239,6 +1387,51 @@
                                         )}
                                     </div>
 
+                                    {/* Configuración de escenarios */}
+                                    {calculationMode === 'volatility' && (
+                                        <div className="mt-4 p-4 bg-gradient-to-br from-terminal-bg to-terminal-card rounded-lg border border-terminal-accent/30">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <span className="text-sm font-semibold text-terminal-accent flex items-center gap-2">
+                                                    <span>📊</span> Análisis de Escenarios
+                                                </span>
+                                                <label className="flex items-center cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={showScenarioChart}
+                                                        onChange={(e) => setShowScenarioChart(e.target.checked)}
+                                                        className="mr-2 w-4 h-4 accent-terminal-accent"
+                                                    />
+                                                    <span className="text-xs text-gray-400">Mostrar</span>
+                                                </label>
+                                            </div>
+                                            
+                                            <div className="mb-3">
+                                                <label className="block text-xs text-gray-400 mb-1.5">
+                                                    Desviaciones estándar (σ)
+                                                </label>
+                                                <div className="grid grid-cols-4 gap-1.5">
+                                                    {['0.5', '1.0', '1.5', '2.0'].map(val => (
+                                                        <button
+                                                            key={val}
+                                                            onClick={() => setScenarioSigma(val)}
+                                                            className={`py-1.5 rounded text-xs font-mono transition-smooth ${
+                                                                scenarioSigma === val
+                                                                    ? 'bg-terminal-accent text-white'
+                                                                    : 'bg-terminal-card text-gray-400 hover:bg-gray-700'
+                                                            }`}
+                                                        >
+                                                            ±{val}σ
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            
+                                            <p className="text-xs text-gray-500">
+                                                GBM: S(t) = S₀·e<sup>(μ-σ²/2)t + σ√t·Z</sup>
+                                            </p>
+                                        </div>
+                                    )}
+
                                     <p className="text-xs text-gray-600 mt-4 p-3 bg-terminal-bg rounded-lg">
                                         ⚠️ Datos orientativos. Verificar antes de operar.
                                     </p>
@@ -1345,6 +1538,189 @@
                                             </div>
                                         </div>
 
+                                        {/* ══════════════════════════════════════════════════════════════ */}
+                                        {/* NUEVO: Gráfico de Escenarios Temporales */}
+                                        {/* ══════════════════════════════════════════════════════════════ */}
+                                        {showScenarioChart && calculationMode === 'volatility' && scenarioData.data.length > 0 && (
+                                            <div className="bg-terminal-panel rounded-xl border border-terminal-accent/50 p-5">
+                                                <div className="flex justify-between items-start mb-4">
+                                                    <div>
+                                                        <h3 className="text-sm font-semibold text-terminal-text flex items-center gap-2">
+                                                            <span className="w-2 h-2 bg-terminal-accent rounded-full animate-pulse"></span>
+                                                            Proyección Temporal por Escenarios
+                                                        </h3>
+                                                        <p className="text-xs text-gray-500 mt-1">
+                                                            Evolución del precio del warrant según movimiento del subyacente (GBM ±{scenarioSigma}σ)
+                                                        </p>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <div className="flex items-center gap-3 text-xs">
+                                                            <span className="flex items-center gap-1">
+                                                                <span className="w-3 h-0.5" style={{ backgroundColor: COLORS.optimistic }}></span>
+                                                                Optimista
+                                                            </span>
+                                                            <span className="flex items-center gap-1">
+                                                                <span className="w-3 h-0.5" style={{ backgroundColor: COLORS.neutral }}></span>
+                                                                Neutral
+                                                            </span>
+                                                            <span className="flex items-center gap-1">
+                                                                <span className="w-3 h-0.5" style={{ backgroundColor: COLORS.pessimistic }}></span>
+                                                                Pesimista
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Resumen de valores al vencimiento */}
+                                                {scenarioData.finalValues && (
+                                                    <div className="grid grid-cols-3 gap-3 mb-4">
+                                                        <div className="bg-terminal-bg rounded-lg p-3 border-l-2" style={{ borderColor: COLORS.optimistic }}>
+                                                            <p className="text-xs text-gray-500 mb-1">
+                                                                Optimista (p{scenarioData.finalValues.percentileOptimistic.toFixed(0)})
+                                                            </p>
+                                                            <p className="font-mono font-bold" style={{ color: COLORS.optimistic }}>
+                                                                {scenarioData.finalValues.optimistic.toFixed(4)} €
+                                                            </p>
+                                                            <p className="text-xs text-gray-600">
+                                                                Spot → {scenarioData.finalValues.spotOptimistic.toLocaleString()}
+                                                            </p>
+                                                        </div>
+                                                        <div className="bg-terminal-bg rounded-lg p-3 border-l-2" style={{ borderColor: COLORS.neutral }}>
+                                                            <p className="text-xs text-gray-500 mb-1">
+                                                                Neutral (p50)
+                                                            </p>
+                                                            <p className="font-mono font-bold" style={{ color: COLORS.neutral }}>
+                                                                {scenarioData.finalValues.neutral.toFixed(4)} €
+                                                            </p>
+                                                            <p className="text-xs text-gray-600">
+                                                                Spot → {scenarioData.finalValues.spotNeutral.toLocaleString()}
+                                                            </p>
+                                                        </div>
+                                                        <div className="bg-terminal-bg rounded-lg p-3 border-l-2" style={{ borderColor: COLORS.pessimistic }}>
+                                                            <p className="text-xs text-gray-500 mb-1">
+                                                                Pesimista (p{scenarioData.finalValues.percentilePessimistic.toFixed(0)})
+                                                            </p>
+                                                            <p className="font-mono font-bold" style={{ color: COLORS.pessimistic }}>
+                                                                {scenarioData.finalValues.pessimistic.toFixed(4)} €
+                                                            </p>
+                                                            <p className="text-xs text-gray-600">
+                                                                Spot → {scenarioData.finalValues.spotPessimistic.toLocaleString()}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                <ResponsiveContainer width="100%" height={320}>
+                                                    <ComposedChart data={scenarioData.data}>
+                                                        <defs>
+                                                            <linearGradient id="coneGradient" x1="0" y1="0" x2="0" y2="1">
+                                                                <stop offset="5%" stopColor={COLORS.primary} stopOpacity={0.15}/>
+                                                                <stop offset="95%" stopColor={COLORS.primary} stopOpacity={0.02}/>
+                                                            </linearGradient>
+                                                        </defs>
+                                                        <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+                                                        <XAxis 
+                                                            dataKey="day" 
+                                                            stroke={COLORS.muted} 
+                                                            tick={{ fill: COLORS.muted, fontSize: 11 }}
+                                                            tickFormatter={(v) => `D${v}`}
+                                                            label={{ 
+                                                                value: 'Días transcurridos', 
+                                                                position: 'insideBottom', 
+                                                                offset: -5,
+                                                                fill: COLORS.muted, 
+                                                                fontSize: 10 
+                                                            }}
+                                                        />
+                                                        <YAxis 
+                                                            stroke={COLORS.muted} 
+                                                            tick={{ fill: COLORS.muted, fontSize: 11 }}
+                                                            tickFormatter={(v) => `${v.toFixed(3)}`}
+                                                            label={{ 
+                                                                value: 'Precio Warrant (€)', 
+                                                                angle: -90, 
+                                                                position: 'insideLeft', 
+                                                                fill: COLORS.muted, 
+                                                                fontSize: 10 
+                                                            }}
+                                                            domain={['auto', 'auto']}
+                                                        />
+                                                        <Tooltip content={<ScenarioTooltip warrantType={warrantType} />} />
+                                                        
+                                                        {/* Área del cono de incertidumbre */}
+                                                        <Area
+                                                            type="monotone"
+                                                            dataKey="range"
+                                                            fill="url(#coneGradient)"
+                                                            stroke="none"
+                                                        />
+                                                        
+                                                        {/* Línea de precio actual */}
+                                                        <ReferenceLine 
+                                                            y={results.premium} 
+                                                            stroke={COLORS.text} 
+                                                            strokeDasharray="5 5"
+                                                            label={{ 
+                                                                value: `Precio actual: ${results.premium.toFixed(4)}€`, 
+                                                                fill: COLORS.text, 
+                                                                fontSize: 9, 
+                                                                position: 'right' 
+                                                            }}
+                                                        />
+                                                        
+                                                        {/* Línea optimista */}
+                                                        <Line 
+                                                            type="monotone" 
+                                                            dataKey="optimistic" 
+                                                            name="Optimista"
+                                                            stroke={COLORS.optimistic} 
+                                                            strokeWidth={2.5} 
+                                                            dot={false}
+                                                            activeDot={{ r: 4, fill: COLORS.optimistic }}
+                                                        />
+                                                        
+                                                        {/* Línea neutral */}
+                                                        <Line 
+                                                            type="monotone" 
+                                                            dataKey="neutral" 
+                                                            name="Neutral"
+                                                            stroke={COLORS.neutral} 
+                                                            strokeWidth={2.5} 
+                                                            dot={false}
+                                                            activeDot={{ r: 4, fill: COLORS.neutral }}
+                                                        />
+                                                        
+                                                        {/* Línea pesimista */}
+                                                        <Line 
+                                                            type="monotone" 
+                                                            dataKey="pessimistic" 
+                                                            name="Pesimista"
+                                                            stroke={COLORS.pessimistic} 
+                                                            strokeWidth={2.5} 
+                                                            dot={false}
+                                                            activeDot={{ r: 4, fill: COLORS.pessimistic }}
+                                                        />
+                                                    </ComposedChart>
+                                                </ResponsiveContainer>
+
+                                                <div className="mt-4 pt-3 border-t border-terminal-border">
+                                                    <div className="flex justify-between items-center text-xs text-gray-500">
+                                                        <p>
+                                                            📐 Modelo: Geometric Brownian Motion · 
+                                                            σ = {results.usedVolatility.toFixed(1)}% · 
+                                                            r = {riskFreeRate}% · 
+                                                            q = {dividendYield}%
+                                                        </p>
+                                                        <p>
+                                                            {warrantType === 'put' 
+                                                                ? '🐻 PUT: Optimista = Spot ↓' 
+                                                                : '🐂 CALL: Optimista = Spot ↑'}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+
                                         {/* Gráfico de Payoff */}
                                         <div className="bg-terminal-panel rounded-xl border border-terminal-border p-5">
                                             <div className="flex justify-between items-start mb-4">
@@ -1417,75 +1793,6 @@
                                                 {warrantType === 'put' ? ' Ganas si el índice BAJA' : ' Ganas si el índice SUBE'}
                                             </p>
                                         </div>
-
-                                        {/* Gráfico de evolución del precio en el tiempo */}
-                                        {calculationMode === 'volatility' && priceEvolutionData.data.length > 0 && (
-                                            <div className="bg-terminal-panel rounded-xl border border-terminal-border p-5">
-                                                <div className="flex justify-between items-start mb-4">
-                                                    <div>
-                                                        <h3 className="text-sm font-semibold text-terminal-text flex items-center gap-2">
-                                                            <span className="w-2 h-2 bg-terminal-warning rounded-full"></span>
-                                                            Evolución del Precio del Warrant
-                                                        </h3>
-                                                        <p className="text-xs text-gray-500 mt-1">
-                                                            Cómo cambia el precio conforme pasa el tiempo (efecto Theta)
-                                                        </p>
-                                                    </div>
-                                                    <div className="text-right text-xs text-gray-500">
-                                                        <p>Eje X: Precio spot</p>
-                                                        <p>Eje Y: Precio warrant (cts)</p>
-                                                    </div>
-                                                </div>
-                                                <ResponsiveContainer width="100%" height={280}>
-                                                    <LineChart data={priceEvolutionData.data}>
-                                                        <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
-                                                        <XAxis 
-                                                            dataKey="price" 
-                                                            stroke={COLORS.muted} 
-                                                            tick={{ fill: COLORS.muted, fontSize: 11 }}
-                                                            tickFormatter={(v) => v.toLocaleString()}
-                                                        />
-                                                        <YAxis 
-                                                            stroke={COLORS.muted} 
-                                                            tick={{ fill: COLORS.muted, fontSize: 11 }}
-                                                            tickFormatter={(v) => `${v.toFixed(1)}`}
-                                                            label={{ value: 'cts', angle: -90, position: 'insideLeft', fill: COLORS.muted, fontSize: 10 }}
-                                                        />
-                                                        <Tooltip content={<PriceEvolutionTooltip />} />
-                                                        <Legend />
-                                                        <ReferenceLine 
-                                                            x={parseNumber(spot)} 
-                                                            stroke={COLORS.text} 
-                                                            strokeDasharray="5 5"
-                                                            label={{ value: 'Spot actual', fill: COLORS.text, fontSize: 9, position: 'top' }}
-                                                        />
-                                                        <ReferenceLine 
-                                                            x={parseNumber(strike)} 
-                                                            stroke={COLORS.muted} 
-                                                            strokeDasharray="5 5"
-                                                            label={{ value: 'Strike', fill: COLORS.muted, fontSize: 9, position: 'bottom' }}
-                                                        />
-                                                        {priceEvolutionData.timePoints.map((tp, idx) => {
-                                                            const colors = [COLORS.primary, COLORS.success, COLORS.danger];
-                                                            return (
-                                                                <Line 
-                                                                    key={tp.label} 
-                                                                    type="monotone" 
-                                                                    dataKey={tp.label} 
-                                                                    name={tp.label}
-                                                                    stroke={colors[idx % 3]} 
-                                                                    strokeWidth={2} 
-                                                                    dot={false}
-                                                                />
-                                                            );
-                                                        })}
-                                                    </LineChart>
-                                                </ResponsiveContainer>
-                                                <p className="text-xs text-gray-600 mt-3 text-center">
-                                                    ⏳ A medida que pasa el tiempo, el valor temporal del warrant decrece (Theta negativo)
-                                                </p>
-                                            </div>
-                                        )}
                                     </>
                                 ) : (
                                     <div className="bg-terminal-panel rounded-xl border border-terminal-danger/50 p-8 text-center">
@@ -1509,7 +1816,7 @@
                     {/* Footer */}
                     <footer className="bg-terminal-panel border-t border-terminal-border px-6 py-4 mt-12">
                         <div className="max-w-7xl mx-auto flex justify-between items-center text-xs text-gray-600">
-                            <p>European Warrant Calculator v3.2 · Black-Scholes-Merton + Volatility Skew</p>
+                            <p>European Warrant Calculator v3.3 · Black-Scholes-Merton + GBM Scenarios</p>
                             <p>Solo para fines educativos · No es asesoramiento financiero</p>
                         </div>
                     </footer>
