@@ -1042,7 +1042,7 @@
             // ─────────────────────────────────────────────────────────────────
             const scenarioData = useMemo(() => {
                 if (!results || calculationMode !== 'volatility') {
-                    return { data: [], finalValues: null };
+                    return { data: [], stats: null };
                 }
 
                 const spotNum = parseNumber(spot);
@@ -1148,14 +1148,66 @@
                     });
                 }
 
-                // Valores finales para mostrar en resumen
-                const finalValues = data.length > 0 ? {
-                    optimistic: data[data.length - 1].optimistic,
-                    neutral: data[data.length - 1].neutral,
-                    pessimistic: data[data.length - 1].pessimistic,
-                    spotOptimistic: data[data.length - 1].spotOptimistic,
-                    spotNeutral: data[data.length - 1].spotNeutral,
-                    spotPessimistic: data[data.length - 1].spotPessimistic,
+                // ═══════════════════════════════════════════════════════════════
+                // Calcular estadísticas útiles para las tarjetas de resumen
+                // ═══════════════════════════════════════════════════════════════
+                
+                const initialPrice = data.length > 0 ? data[0].optimistic : 0;
+                
+                // OPTIMISTA: Encontrar el máximo y cuándo ocurre
+                let maxOptimistic = { value: 0, day: 0, spot: 0 };
+                data.forEach(point => {
+                    if (point.optimistic > maxOptimistic.value) {
+                        maxOptimistic = {
+                            value: point.optimistic,
+                            day: point.day,
+                            spot: point.spotOptimistic
+                        };
+                    }
+                });
+                
+                // NEUTRAL: Valor a mitad del período y % de decay
+                const midpointIndex = Math.floor(data.length / 2);
+                const midpointData = data[midpointIndex] || data[0];
+                const neutralDecay = initialPrice > 0 
+                    ? ((initialPrice - midpointData.neutral) / initialPrice) * 100 
+                    : 0;
+                
+                // PESIMISTA: Días hasta perder 50% del valor inicial
+                let daysToHalfValue = null;
+                const halfValue = initialPrice * 0.5;
+                for (let i = 0; i < data.length; i++) {
+                    if (data[i].pessimistic <= halfValue) {
+                        daysToHalfValue = data[i].day;
+                        break;
+                    }
+                }
+                
+                // P&L potencial del escenario optimista
+                const maxPnLPercent = initialPrice > 0 
+                    ? ((maxOptimistic.value - initialPrice) / initialPrice) * 100 
+                    : 0;
+
+                const stats = data.length > 0 ? {
+                    // Escenario Optimista
+                    optimisticMax: maxOptimistic.value,
+                    optimisticMaxDay: maxOptimistic.day,
+                    optimisticMaxSpot: maxOptimistic.spot,
+                    optimisticPnL: maxPnLPercent,
+                    
+                    // Escenario Neutral
+                    neutralMidValue: midpointData.neutral,
+                    neutralMidDay: midpointData.day,
+                    neutralDecayPercent: neutralDecay,
+                    
+                    // Escenario Pesimista
+                    pessimisticDaysToHalf: daysToHalfValue,
+                    pessimisticFinal: data[data.length - 1].pessimistic,
+                    pessimisticFinalSpot: data[data.length - 1].spotPessimistic,
+                    
+                    // Datos generales
+                    initialPrice: initialPrice,
+                    totalDays: daysNum,
                     percentileOptimistic: warrantType === 'put' 
                         ? zToPercentile(-parseNumber(scenarioSigma))
                         : zToPercentile(parseNumber(scenarioSigma)),
@@ -1164,7 +1216,7 @@
                         : zToPercentile(-parseNumber(scenarioSigma))
                 } : null;
 
-                return { data, finalValues };
+                return { data, stats };
             }, [results, spot, strike, daysToExpiration, riskFreeRate, dividendYield, warrantType, conversionRatio, calculationMode, scenarioSigma]);
 
             // Render
@@ -1571,41 +1623,63 @@
                                                     </div>
                                                 </div>
 
-                                                {/* Resumen de valores al vencimiento */}
-                                                {scenarioData.finalValues && (
+                                                {/* Resumen de estadísticas clave */}
+                                                {scenarioData.stats && (
                                                     <div className="grid grid-cols-3 gap-3 mb-4">
+                                                        {/* OPTIMISTA: Máximo alcanzable */}
                                                         <div className="bg-terminal-bg rounded-lg p-3 border-l-2" style={{ borderColor: COLORS.optimistic }}>
-                                                            <p className="text-xs text-gray-500 mb-1">
-                                                                Optimista (p{scenarioData.finalValues.percentileOptimistic.toFixed(0)})
+                                                            <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
+                                                                <span>🎯</span> Máximo alcanzable
                                                             </p>
-                                                            <p className="font-mono font-bold" style={{ color: COLORS.optimistic }}>
-                                                                {scenarioData.finalValues.optimistic.toFixed(4)} €
+                                                            <p className="font-mono font-bold text-lg" style={{ color: COLORS.optimistic }}>
+                                                                {scenarioData.stats.optimisticMax.toFixed(4)} €
                                                             </p>
-                                                            <p className="text-xs text-gray-600">
-                                                                Spot → {scenarioData.finalValues.spotOptimistic.toLocaleString()}
-                                                            </p>
+                                                            <div className="flex justify-between items-center mt-1">
+                                                                <span className="text-xs text-gray-600">
+                                                                    Día {scenarioData.stats.optimisticMaxDay}
+                                                                </span>
+                                                                <span className={`text-xs font-mono ${scenarioData.stats.optimisticPnL >= 0 ? 'text-terminal-success' : 'text-terminal-danger'}`}>
+                                                                    {scenarioData.stats.optimisticPnL >= 0 ? '+' : ''}{scenarioData.stats.optimisticPnL.toFixed(1)}%
+                                                                </span>
+                                                            </div>
                                                         </div>
+                                                        
+                                                        {/* NEUTRAL: Time decay a mitad de período */}
                                                         <div className="bg-terminal-bg rounded-lg p-3 border-l-2" style={{ borderColor: COLORS.neutral }}>
-                                                            <p className="text-xs text-gray-500 mb-1">
-                                                                Neutral (p50)
+                                                            <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
+                                                                <span>⏳</span> Valor día {scenarioData.stats.neutralMidDay}
                                                             </p>
-                                                            <p className="font-mono font-bold" style={{ color: COLORS.neutral }}>
-                                                                {scenarioData.finalValues.neutral.toFixed(4)} €
+                                                            <p className="font-mono font-bold text-lg" style={{ color: COLORS.neutral }}>
+                                                                {scenarioData.stats.neutralMidValue.toFixed(4)} €
                                                             </p>
-                                                            <p className="text-xs text-gray-600">
-                                                                Spot → {scenarioData.finalValues.spotNeutral.toLocaleString()}
-                                                            </p>
+                                                            <div className="flex justify-between items-center mt-1">
+                                                                <span className="text-xs text-gray-600">
+                                                                    Theta decay
+                                                                </span>
+                                                                <span className="text-xs font-mono text-terminal-danger">
+                                                                    -{scenarioData.stats.neutralDecayPercent.toFixed(1)}%
+                                                                </span>
+                                                            </div>
                                                         </div>
+                                                        
+                                                        {/* PESIMISTA: Tiempo hasta pérdida crítica */}
                                                         <div className="bg-terminal-bg rounded-lg p-3 border-l-2" style={{ borderColor: COLORS.pessimistic }}>
-                                                            <p className="text-xs text-gray-500 mb-1">
-                                                                Pesimista (p{scenarioData.finalValues.percentilePessimistic.toFixed(0)})
+                                                            <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
+                                                                <span>⚠️</span> Riesgo -50%
                                                             </p>
-                                                            <p className="font-mono font-bold" style={{ color: COLORS.pessimistic }}>
-                                                                {scenarioData.finalValues.pessimistic.toFixed(4)} €
+                                                            <p className="font-mono font-bold text-lg" style={{ color: COLORS.pessimistic }}>
+                                                                {scenarioData.stats.pessimisticDaysToHalf !== null 
+                                                                    ? `Día ${scenarioData.stats.pessimisticDaysToHalf}`
+                                                                    : 'No alcanzado'}
                                                             </p>
-                                                            <p className="text-xs text-gray-600">
-                                                                Spot → {scenarioData.finalValues.spotPessimistic.toLocaleString()}
-                                                            </p>
+                                                            <div className="flex justify-between items-center mt-1">
+                                                                <span className="text-xs text-gray-600">
+                                                                    Spot → {scenarioData.stats.pessimisticFinalSpot?.toLocaleString()}
+                                                                </span>
+                                                                <span className="text-xs font-mono text-gray-500">
+                                                                    p{scenarioData.stats.percentilePessimistic.toFixed(0)}
+                                                                </span>
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 )}
