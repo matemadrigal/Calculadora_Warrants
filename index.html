@@ -737,6 +737,46 @@
         };
 
         /**
+         * Parsea un número aceptando tanto punto como coma como separador decimal.
+         * Esto permite usar formato europeo (1.234,56) o americano (1,234.56).
+         * 
+         * @param {string|number} value - Valor a parsear
+         * @returns {number} - Número parseado o NaN si es inválido
+         */
+        function parseNumber(value) {
+            if (typeof value === 'number') return value;
+            if (typeof value !== 'string') return NaN;
+            
+            // Eliminar espacios
+            let cleaned = value.trim();
+            
+            // Si tiene tanto punto como coma, determinar cuál es el decimal
+            const hasComma = cleaned.includes(',');
+            const hasDot = cleaned.includes('.');
+            
+            if (hasComma && hasDot) {
+                // Formato europeo: 1.234,56 → punto es miles, coma es decimal
+                // Formato americano: 1,234.56 → coma es miles, punto es decimal
+                const lastComma = cleaned.lastIndexOf(',');
+                const lastDot = cleaned.lastIndexOf('.');
+                
+                if (lastComma > lastDot) {
+                    // Coma es el separador decimal (formato europeo)
+                    cleaned = cleaned.replace(/\./g, '').replace(',', '.');
+                } else {
+                    // Punto es el separador decimal (formato americano)
+                    cleaned = cleaned.replace(/,/g, '');
+                }
+            } else if (hasComma) {
+                // Solo tiene coma - asumimos que es separador decimal
+                cleaned = cleaned.replace(',', '.');
+            }
+            // Si solo tiene punto, parseFloat lo maneja bien
+            
+            return parseFloat(cleaned);
+        }
+
+        /**
          * Valida todos los inputs del calculador.
          * 
          * @param {Object} inputs - Objeto con todos los valores de input
@@ -748,12 +788,12 @@
             const { spot, strike, daysToExpiration, riskFreeRate, dividendYield, conversionRatio, volatility, marketPrice } = inputs;
 
             const checks = [
-                { value: parseFloat(spot), field: 'spot', rules: VALIDATION_RULES.spot },
-                { value: parseFloat(strike), field: 'strike', rules: VALIDATION_RULES.strike },
+                { value: parseNumber(spot), field: 'spot', rules: VALIDATION_RULES.spot },
+                { value: parseNumber(strike), field: 'strike', rules: VALIDATION_RULES.strike },
                 { value: parseInt(daysToExpiration), field: 'days', rules: VALIDATION_RULES.days },
-                { value: parseFloat(riskFreeRate), field: 'riskFree', rules: VALIDATION_RULES.riskFree },
-                { value: parseFloat(dividendYield), field: 'dividend', rules: VALIDATION_RULES.dividend },
-                { value: parseFloat(conversionRatio), field: 'ratio', rules: VALIDATION_RULES.ratio }
+                { value: parseNumber(riskFreeRate), field: 'riskFree', rules: VALIDATION_RULES.riskFree },
+                { value: parseNumber(dividendYield), field: 'dividend', rules: VALIDATION_RULES.dividend },
+                { value: parseNumber(conversionRatio), field: 'ratio', rules: VALIDATION_RULES.ratio }
             ];
 
             checks.forEach(({ value, field, rules }) => {
@@ -763,12 +803,12 @@
             });
 
             if (calculationMode === 'volatility') {
-                const vol = parseFloat(volatility);
+                const vol = parseNumber(volatility);
                 if (isNaN(vol) || vol < VALIDATION_RULES.volatility.min || vol > VALIDATION_RULES.volatility.max) {
                     errors.push({ field: 'volatility', message: VALIDATION_RULES.volatility.message });
                 }
             } else {
-                const price = parseFloat(marketPrice);
+                const price = parseNumber(marketPrice);
                 if (isNaN(price) || price <= 0) {
                     errors.push({ field: 'marketPrice', message: VALIDATION_RULES.marketPrice.message });
                 }
@@ -943,9 +983,9 @@
             const results = useMemo(() => {
                 if (errors.length > 0) return null;
 
-                const ratio = parseFloat(conversionRatio);
-                const spotNum = parseFloat(spot);
-                const strikeNum = parseFloat(strike);
+                const ratio = parseNumber(conversionRatio);
+                const spotNum = parseNumber(spot);
+                const strikeNum = parseNumber(strike);
                 const daysNum = parseInt(daysToExpiration);
 
                 const baseParams = {
@@ -953,14 +993,14 @@
                     spot: spotNum,
                     strike: strikeNum,
                     daysToExpiration: daysNum,
-                    riskFreeRate: parseFloat(riskFreeRate),
-                    dividendYield: parseFloat(dividendYield)
+                    riskFreeRate: parseNumber(riskFreeRate),
+                    dividendYield: parseNumber(dividendYield)
                 };
 
                 let premium, impliedVol, usedVolatility, inputVolatility;
 
                 if (calculationMode === 'volatility') {
-                    inputVolatility = parseFloat(volatility);
+                    inputVolatility = parseNumber(volatility);
                     
                     // Aplicar ajuste de skew si está habilitado
                     if (enableSkewAdjustment) {
@@ -976,7 +1016,7 @@
                     premium = blackScholesPrice(priceParams) * ratio;
                     impliedVol = null;
                 } else {
-                    const marketPriceNum = parseFloat(marketPrice);
+                    const marketPriceNum = parseNumber(marketPrice);
                     const bsEquivalentPrice = marketPriceNum / ratio;
                     
                     const ivParams = { ...baseParams, marketPrice: bsEquivalentPrice };
@@ -1053,9 +1093,9 @@
             const payoffData = useMemo(() => {
                 if (!results) return [];
 
-                const strikeNum = parseFloat(strike);
-                const ratio = parseFloat(conversionRatio);
-                const spotNum = parseFloat(spot);
+                const strikeNum = parseNumber(strike);
+                const ratio = parseNumber(conversionRatio);
+                const spotNum = parseNumber(spot);
                 const premium = results.premium;
                 
                 // Rango centrado en el spot actual (±20%)
@@ -1097,9 +1137,9 @@
                     return { data: [], timePoints: [] };
                 }
 
-                const strikeNum = parseFloat(strike);
-                const spotNum = parseFloat(spot);
-                const ratio = parseFloat(conversionRatio);
+                const strikeNum = parseNumber(strike);
+                const spotNum = parseNumber(spot);
+                const ratio = parseNumber(conversionRatio);
                 const daysNum = parseInt(daysToExpiration);
                 const volNum = results.usedVolatility;
                 
@@ -1129,8 +1169,8 @@
                             spot: price,
                             strike: strikeNum,
                             daysToExpiration: tp.days,
-                            riskFreeRate: parseFloat(riskFreeRate),
-                            dividendYield: parseFloat(dividendYield),
+                            riskFreeRate: parseNumber(riskFreeRate),
+                            dividendYield: parseNumber(dividendYield),
                             volatility: volNum
                         };
                         // Precio del warrant (en céntimos para mejor lectura)
@@ -1518,7 +1558,7 @@
                                                     <Tooltip content={<PayoffTooltip />} />
                                                     <ReferenceLine y={0} stroke={COLORS.text} strokeWidth={1} />
                                                     <ReferenceLine 
-                                                        x={parseFloat(strike)} 
+                                                        x={parseNumber(strike)} 
                                                         stroke={COLORS.muted} 
                                                         strokeDasharray="5 5" 
                                                         label={{ value: `K=${strike}`, fill: COLORS.muted, fontSize: 9, position: 'top' }} 
@@ -1581,7 +1621,7 @@
                                                         <Tooltip content={<PriceEvolutionTooltip />} />
                                                         <Legend />
                                                         <ReferenceLine 
-                                                            x={parseFloat(spot)} 
+                                                            x={parseNumber(spot)} 
                                                             stroke={COLORS.text} 
                                                             strokeDasharray="5 5"
                                                             label={{ value: 'Spot actual', fill: COLORS.text, fontSize: 9, position: 'top' }}
