@@ -12,7 +12,7 @@
     <meta property="og:description" content="Calculadora profesional de warrants con Black-Scholes">
     <meta property="og:type" content="website">
     
-    <title>European Warrant Calculator v3.0</title>
+    <title>European Warrant Calculator v3.1 - Volatility Skew</title>
 
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
@@ -141,7 +141,7 @@
 
     <script type="text/babel">
         // ============================================================================
-        // EUROPEAN WARRANT CALCULATOR v3.0
+        // EUROPEAN WARRANT CALCULATOR v3.1 - Volatility Skew
         // ============================================================================
         // Implementación profesional del modelo Black-Scholes-Merton para warrants
         // europeos con todas las Greeks y análisis completo de sensibilidad.
@@ -647,6 +647,56 @@
         }
 
         /**
+         * Ajusta la volatilidad ATM según el skew de mercado para índices de renta variable.
+         * 
+         * El skew captura el fenómeno donde opciones OTM (especialmente PUTs) cotizan
+         * con volatilidades implícitas superiores a las ATM.
+         * 
+         * @param {number} sigmaATM - Volatilidad ATM en % (ej: 28 para 28%)
+         * @param {number} S - Precio spot del subyacente
+         * @param {number} K - Precio de ejercicio (strike)
+         * @param {number} T - Tiempo a vencimiento en años
+         * @param {string} type - 'call' o 'put'
+         * @returns {number} - Volatilidad ajustada en %
+         */
+        function adjustVolatilityForSkew(sigmaATM, S, K, T, type) {
+            // Parámetros calibrados para índices de renta variable
+            const putSkewIntensity = 2.2;
+            const callSkewIntensity = 0.5;
+            const smileCurvature = 0.5;
+            const timeDecayExponent = 0.4;
+
+            if (sigmaATM <= 0 || S <= 0 || K <= 0 || T <= 0) return sigmaATM;
+
+            const logMoneyness = Math.log(S / K);
+            const T_ref = 30 / DAYS_PER_YEAR;
+            const timeFactor = Math.min(2.5, Math.pow(T_ref / Math.max(T, T_ref / 10), timeDecayExponent));
+
+            let skewAdjustment;
+
+            if (type === 'put') {
+                if (logMoneyness > 0) {
+                    skewAdjustment = putSkewIntensity * logMoneyness * timeFactor
+                                   + smileCurvature * logMoneyness * logMoneyness;
+                } else {
+                    skewAdjustment = putSkewIntensity * logMoneyness * timeFactor * 0.25
+                                   + smileCurvature * logMoneyness * logMoneyness * 0.4;
+                }
+            } else {
+                if (logMoneyness < 0) {
+                    skewAdjustment = -callSkewIntensity * logMoneyness * timeFactor
+                                   + smileCurvature * logMoneyness * logMoneyness * 0.3;
+                } else {
+                    skewAdjustment = callSkewIntensity * logMoneyness * timeFactor * 0.15
+                                   + smileCurvature * logMoneyness * logMoneyness * 0.2;
+                }
+            }
+
+            const adjustedVol = sigmaATM * (1 + skewAdjustment);
+            return Math.max(sigmaATM * 0.6, Math.min(sigmaATM * 2.5, adjustedVol));
+        }
+
+        /**
          * Determina el estado de moneyness de una opción.
          * 
          * @param {string} type - 'call' o 'put'
@@ -848,6 +898,7 @@
             const [calculationMode, setCalculationMode] = useState('volatility');
             const [volatility, setVolatility] = useState('16');
             const [marketPrice, setMarketPrice] = useState('');
+            const [enableSkewAdjustment, setEnableSkewAdjustment] = useState(true);
 
             const currentAsset = UNDERLYING_ASSETS[selectedAsset];
 
@@ -906,10 +957,21 @@
                     dividendYield: parseFloat(dividendYield)
                 };
 
-                let premium, impliedVol, usedVolatility;
+                let premium, impliedVol, usedVolatility, inputVolatility;
 
                 if (calculationMode === 'volatility') {
-                    usedVolatility = parseFloat(volatility);
+                    inputVolatility = parseFloat(volatility);
+                    
+                    // Aplicar ajuste de skew si está habilitado
+                    if (enableSkewAdjustment) {
+                        const T = daysNum / DAYS_PER_YEAR;
+                        usedVolatility = adjustVolatilityForSkew(
+                            inputVolatility, spotNum, strikeNum, T, warrantType
+                        );
+                    } else {
+                        usedVolatility = inputVolatility;
+                    }
+                    
                     const priceParams = { ...baseParams, volatility: usedVolatility };
                     premium = blackScholesPrice(priceParams) * ratio;
                     impliedVol = null;
@@ -982,7 +1044,7 @@
                     usedVolatility,
                     leverage: isFinite(leverage) ? leverage : 0
                 };
-            }, [errors, warrantType, spot, strike, daysToExpiration, riskFreeRate, dividendYield, conversionRatio, calculationMode, volatility, marketPrice]);
+            }, [errors, warrantType, spot, strike, daysToExpiration, riskFreeRate, dividendYield, conversionRatio, calculationMode, volatility, marketPrice, enableSkewAdjustment]);
 
             // ─────────────────────────────────────────────────────────────────
             // Datos para gráfico de payoff
@@ -1103,7 +1165,7 @@
                                     {new Date().toLocaleDateString('es-ES')}
                                 </span>
                                 <span className="px-2 py-1 bg-terminal-accent/20 text-terminal-accent text-xs font-mono rounded">
-                                    v3.0
+                                    v3.1
                                 </span>
                             </div>
                         </div>
@@ -1260,14 +1322,41 @@
                                         </select>
 
                                         {calculationMode === 'volatility' ? (
-                                            <NumberInput
-                                                label="Volatilidad (σ)"
-                                                value={volatility}
-                                                onChange={setVolatility}
-                                                step="0.5"
-                                                suffix="%"
-                                                error={getError('volatility')}
-                                            />
+                                            <>
+                                                <NumberInput
+                                                    label="Volatilidad (σ)"
+                                                    value={volatility}
+                                                    onChange={setVolatility}
+                                                    step="0.5"
+                                                    suffix="%"
+                                                    error={getError('volatility')}
+                                                />
+                                                
+                                                {/* Control de Volatility Skew */}
+                                                <div className="mt-3 p-3 bg-terminal-bg rounded-lg border border-terminal-border">
+                                                    <div className="flex items-center justify-between">
+                                                        <label className="flex items-center cursor-pointer">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={enableSkewAdjustment}
+                                                                onChange={(e) => setEnableSkewAdjustment(e.target.checked)}
+                                                                className="mr-2 w-4 h-4 accent-terminal-warning"
+                                                            />
+                                                            <span className="text-sm text-terminal-text">
+                                                                Volatility Skew
+                                                            </span>
+                                                        </label>
+                                                        {enableSkewAdjustment && results && (
+                                                            <span className="text-sm text-terminal-warning font-mono">
+                                                                σ: {results.usedVolatility.toFixed(1)}%
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <p className="text-xs text-gray-500 mt-1">
+                                                        Ajusta σ según moneyness (OTM → mayor IV)
+                                                    </p>
+                                                </div>
+                                            </>
                                         ) : (
                                             <NumberInput
                                                 label="Precio de Mercado"
@@ -1541,7 +1630,7 @@
                     {/* Footer */}
                     <footer className="bg-terminal-panel border-t border-terminal-border px-6 py-4 mt-12">
                         <div className="max-w-7xl mx-auto flex justify-between items-center text-xs text-gray-600">
-                            <p>European Warrant Calculator v3.0 · Black-Scholes-Merton</p>
+                            <p>European Warrant Calculator v3.1 · Black-Scholes-Merton + Volatility Skew</p>
                             <p>Solo para fines educativos · No es asesoramiento financiero</p>
                         </div>
                     </footer>
