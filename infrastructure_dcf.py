@@ -593,12 +593,15 @@ class InfrastructureDCF:
 
         return wacc
 
-    def calculate_valuation(self, projection_years: int = 10) -> ValuationResult:
+    def calculate_valuation(self, projection_years: int = 10, custom_growth_rates: Optional[List[float]] = None) -> ValuationResult:
         """
         Perform complete DCF valuation.
 
         Args:
             projection_years: Number of years for explicit forecast (default 10)
+            custom_growth_rates: Optional list of growth rates for each year.
+                                If provided, overrides tapering growth calculation.
+                                Example: [0.08, 0.10, 0.12, 0.15, 0.18]
 
         Returns:
             ValuationResult object
@@ -622,17 +625,33 @@ class InfrastructureDCF:
         projected_fcf = []
         fcf_prev = normalized_fcf
 
-        for year in range(1, projection_years + 1):
-            # Taper growth: linear convergence to terminal rate
-            growth_rate = (
-                growth_rate_high * (1 - year / projection_years) +
-                growth_rate_terminal * (year / projection_years)
-            )
+        # Use custom growth rates if provided, otherwise use tapering
+        if custom_growth_rates is not None:
+            # Validate custom growth rates
+            if len(custom_growth_rates) < projection_years:
+                # Extend with terminal growth rate if needed
+                extended_rates = list(custom_growth_rates) + [growth_rate_terminal] * (projection_years - len(custom_growth_rates))
+            else:
+                extended_rates = custom_growth_rates[:projection_years]
 
-            # Apply growth to previous year's FCF
-            fcf_year = fcf_prev * (1 + growth_rate)
-            projected_fcf.append(fcf_year)
-            fcf_prev = fcf_year
+            for year in range(1, projection_years + 1):
+                growth_rate = extended_rates[year - 1]
+                fcf_year = fcf_prev * (1 + growth_rate)
+                projected_fcf.append(fcf_year)
+                fcf_prev = fcf_year
+        else:
+            # Original tapering logic
+            for year in range(1, projection_years + 1):
+                # Taper growth: linear convergence to terminal rate
+                growth_rate = (
+                    growth_rate_high * (1 - year / projection_years) +
+                    growth_rate_terminal * (year / projection_years)
+                )
+
+                # Apply growth to previous year's FCF
+                fcf_year = fcf_prev * (1 + growth_rate)
+                projected_fcf.append(fcf_year)
+                fcf_prev = fcf_year
 
         # Step 5: Terminal Value
         terminal_fcf = projected_fcf[-1] * (1 + growth_rate_terminal)
